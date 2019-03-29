@@ -67,7 +67,6 @@ char **json_handler_parse_string_array(const char *json_str) {
 
 
 char **json_handler_parse_addr_array(const char *json_str) {
-	printf("Entering json_handler_parse_addr_array\n");
 	json_object *jobj = json_tokener_parse(json_str);
 	if (jobj == NULL) {
 		fprintf(stderr, "json-handler error: unable to parse the string: %s\n", json_str);
@@ -98,7 +97,6 @@ char **json_handler_parse_addr_array(const char *json_str) {
 	for (int i = 0; i < arr_len; ++i) {
 		jelem = json_object_array_get_idx(jobj, i);
 		type = json_object_get_type(jelem);
-		printf("%d\n", type);
 		if (type == json_type_null) {
 			printf("No addresses are defined for the PvD\n");
 			json_object_put(jobj);
