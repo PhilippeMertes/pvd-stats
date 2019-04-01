@@ -14,11 +14,13 @@
 #include <netinet/ether.h>
 #include <netinet/ip6.h>
 //#include <linux/if_packet.h>
+#include <linux/tcp.h>
 
 #include "json-handler.h"
 
 #define PVDD_PORT 10101
-#define SLL_LEN 16
+#define LEN_SLL 16
+#define LEN_IPV6 40
 
 typedef struct pvd_info {
 	char *name;
@@ -32,6 +34,14 @@ typedef struct pvd_throughput {
 	long ref_ts;
 } t_pvd_throughput;
 
+typedef struct pvd_tcp_session {
+	u_int8_t src_ip[16];
+	u_int8_t dst_ip[16];
+	u_int16_t src_port;
+	u_int16_t dst_port;
+	struct pvd_tcp_session *next;
+} t_pvd_tcp_session;
+
 typedef struct pvd_tcp {
 	t_pvd_throughput *tput;
 	unsigned int rtt;
@@ -43,6 +53,7 @@ typedef struct pvd_stats {
 	unsigned int rcvd_cnt;
 	unsigned int snt_cnt;
 	t_pvd_throughput *tput;
+	t_pvd_tcp_session *tcp_sess;
 } t_pvd_stats;
 
 /*
@@ -121,7 +132,36 @@ void free_stats(t_pvd_stats *stats, int size) {
 		free(info);
 		pcap_close(stats[i].pcap);
 		free(stats[i].tput);
+		t_pvd_tcp_session *sess = stats[i].tcp_sess;
+		t_pvd_tcp_session *next_sess;
+		while(sess != NULL) {
+			next_sess = sess->next;
+			free(sess);
+			sess = next_sess;
+		}
 	}
+}
+
+
+int init_stats(t_pvd_stats *stats, int size) {
+	for (int i = 0; i < size; ++i) {
+		stats[i].info = malloc(sizeof(t_pvd_info));
+		stats[i].tput = malloc(sizeof(t_pvd_throughput));
+		stats[i].tcp_sess = malloc(sizeof(t_pvd_tcp_session));
+		if (stats[i].info == NULL || stats[i].tput == NULL || stats[i].tcp_sess == NULL) {
+			fprintf(stderr, "Unable to allocate memory for the structure containing the PvD stats\n");
+			free_stats(stats, i);
+			return EXIT_FAILURE;
+		}
+		stats[i].tput->lst_ts = -1;
+		stats[i].tput->lst = 0;
+		stats[i].tput->avg = 0;
+		stats[i].rcvd_cnt = 0;
+		stats[i].snt_cnt = 0;
+		stats[i].tcp_sess->src_port = 0;
+		stats[i].tcp_sess->dst_port = 0;
+	}
+	return EXIT_SUCCESS;
 }
 
 /*
@@ -157,11 +197,59 @@ u_int16_t get_ip_protocol_type(const u_char *packet) {
 }
 */
 
+void print_ip6_addr(struct in6_addr *addr) {
+	for (int i = 0; i < 16; ++i) {
+		printf("%x", addr->s6_addr[i]);
+		if (i % 2 == 1 && i != 15)
+			printf(":");
+	}
+	printf("\n");
+}
+
+int add_tcp_session(t_pvd_tcp_session *sessions, const u_int8_t src_ip[16], const u_int8_t dst_ip[16],
+	const u_int16_t src_port, const u_int16_t dst_port) {
+	t_pvd_tcp_session *sess = sessions;
+	// get to the last element of the linked list
+	while (sess->next != NULL)
+		sess = sess->next;
+
+	// allocate memory
+	sess->next = malloc(sizeof(t_pvd_tcp_session));
+	if (sess->next == NULL) {
+		fprintf(stderr, "Unable to allocate memory to store the session\n");
+		return EXIT_FAILURE;
+	}
+
+	// add values to the new element
+	sess = sess->next;
+	memcpy(sess->src_ip, src_ip, 16);
+	memcpy(sess->dst_ip, dst_ip, 16);
+	sess->src_port = src_port;
+	sess->dst_port = dst_port;
+	sess->next = NULL;
+
+	return EXIT_SUCCESS;
+}
+
+
+t_pvd_tcp_session *find_tcp_session(t_pvd_tcp_session *sessions, const u_int8_t src_ip[16], const u_int8_t dst_ip[16],
+	const u_int16_t src_port, const u_int16_t dst_port) {
+	t_pvd_tcp_session *sess = sessions;
+
+	while(sess != NULL) {
+		if (!memcmp(sess->src_ip, src_ip, 16) && !memcmp(sess->dst_ip, dst_ip, 16)
+			&& sess->src_port == src_port && sess->dst_port == dst_port)
+			break;
+		sess = sess->next;
+	}
+	return sess;
+}
+
 
 void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char *packet) {
 	t_pvd_stats *stats = (t_pvd_stats *) args;
 
-	//printf("packet %d: ts = %ld, len = %d\n", stats->nb_packets++, pkthdr->ts.tv_sec, pkthdr->len);
+	printf("ts = %ld, len = %d\n", pkthdr->ts.tv_sec, pkthdr->len);
 	// ==== link-layer header ====
 	struct linux_sll *sll = (struct linux_sll *) packet;
 	// packet received or sent
@@ -177,8 +265,28 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 
 
 	// ==== network-layer header ====
+	struct ip6_hdr *ip = (struct ip6_hdr *) &packet[LEN_SLL];
+	print_ip6_addr(&ip->ip6_dst);
+	print_ip6_addr(&ip->ip6_src);
 
+	// check if packet contains some transport-layer payload
+	if (ntohs(ip->ip6_plen) == 0)
+		return;
 
+	// ==== TCP transport-layer ====
+	if (ip->ip6_nxt == IPPROTO_TCP) {
+		struct tcphdr *tcp = (struct tcphdr *) &packet[LEN_SLL+LEN_IPV6];
+		printf("source port: %d\n", ntohs(tcp->source));
+		printf("dest port: %d\n", ntohs(tcp->dest));
+		printf("window: %d\n", ntohs(tcp->window));
+		t_pvd_tcp_session *sess = find_tcp_session(stats->tcp_sess, ip->ip6_dst.s6_addr, ip->ip6_src.s6_addr, tcp->dest, tcp->source);
+		if (sess) {
+			printf("session found\n");
+		} else {
+			printf("New session added: %d\n", add_tcp_session(stats->tcp_sess, ip->ip6_src.s6_addr, ip->ip6_dst.s6_addr, tcp->source, tcp->dest));
+		}
+	}
+	printf("\n");
 }
 
 
@@ -234,7 +342,8 @@ int main(int argc, char **argv) {
 	// to be removed afterwards
 	int stats_size = 1;
 	t_pvd_stats stats[stats_size];
-	stats[0].info = malloc(sizeof(t_pvd_info));
+	if (init_stats(stats, stats_size))
+		exit(0);
 	stats[0].info->addr = calloc(2, sizeof(char *));
 	stats[0].info->addr[0] = "2a02:a03f:4208:4900:c1f6:d20d:1526:44be";
 
@@ -245,9 +354,6 @@ int main(int argc, char **argv) {
 			fprintf(stderr, "pcap_open_live(): %s\n", errbuf);
 			exit(2);
 		}
-		printf("Datalink type: %d\n", pcap_datalink(stats[i].pcap));
-		if (pcap_datalink(stats[i].pcap) == DLT_LINUX_SLL)
-			printf("LINUX_SLL\n");
 
 		if (stats[i].info->addr[0] == NULL) {
 			printf("There is no address associated to the pvd %s\n", stats[i].info->name);
@@ -269,20 +375,7 @@ int main(int argc, char **argv) {
 			perror("Error while setting the packet filter\n");
 			exit(2);
 		}
-
-		// initialize statistics values
-		stats[i].tput = malloc(sizeof(t_pvd_throughput));
-		if (stats[i].tput == NULL) {
-			fprintf(stderr, "Unable to allocate memory for the throughput of PvD: %s\n",
-				stats[i].info->name);
-			exit(EXIT_FAILURE);
-		}
-		stats[i].tput->lst_ts = -1;
-		stats[i].tput->lst = 0;
-		stats[i].tput->avg = 0;
-		stats[i].rcvd_cnt = 0;
-		stats[i].snt_cnt = 0;
-
+		
 		pcap_loop(stats[i].pcap, -1, pcap_callback, (u_char*) &stats[i]);
 
 		free(filter);
