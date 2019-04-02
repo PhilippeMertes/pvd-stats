@@ -296,16 +296,26 @@ void update_throughput_rtt(t_pvd_stats *stats, t_pvd_tcp_session *sess, struct t
 	double curr_rtt = (ts.tv_sec + ts.tv_usec * pow(10, -6)) - (sess->ts->tv_sec + sess->ts->tv_usec * pow(10, -6));
 	printf("curr_rtt: %f\n", curr_rtt);
 	t_pvd_rtt *rtt = stats->rtt;
-	if (curr_rtt < rtt->min || rtt->min == 0)
-		rtt->min = curr_rtt;
-	if (curr_rtt > rtt->max)
-		rtt->max = curr_rtt;
+	rtt->min = (curr_rtt < rtt->min || rtt->min == 0) ? curr_rtt : rtt->min;
+	rtt->max = (curr_rtt > rtt->max) ? curr_rtt: rtt->max;
 	rtt->avg = ((double)(rtt->nb) * rtt->avg + curr_rtt) / (double) (rtt->nb+1);
 	++rtt->nb;
 	printf("min: %f\n", rtt->min);
 	printf("max: %f\n", rtt->max);
 	printf("avg: %f\n", rtt->avg);
 	printf("nb: %d\n", rtt->nb);
+
+	double curr_tput = (double) win / curr_rtt;
+	t_pvd_throughput *tput = stats->tput;
+
+	tput->min = (curr_tput < tput->min || tput->min == 0) ? curr_tput : tput->min;
+	tput->max = (curr_tput > tput->max) ? curr_tput : tput->max;
+	tput->avg = ((double)(tput->nb) * tput->avg + curr_tput) / (double) (tput->nb+1);
+	++tput->nb;
+	printf("min: %f\n", tput->min);
+	printf("max: %f\n", tput->max);
+	printf("avg: %f\n", tput->avg);
+	printf("nb: %d\n", tput->nb);
 }
 
 
