@@ -171,6 +171,10 @@ int init_stats(t_pvd_stats *stats, int size) {
 		stats[i].tput->min = 0;
 		stats[i].tput->max = 0;
 		stats[i].tput->nb = 0;
+		stats[i].rtt->avg = 0;
+		stats[i].rtt->min = 0;
+		stats[i].rtt->max = 0;
+		stats[i].rtt->nb = 0;
 		stats[i].rcvd_cnt = 0;
 		stats[i].snt_cnt = 0;
 	}
@@ -291,6 +295,17 @@ t_pvd_tcp_session *find_tcp_session(t_pvd_tcp_session *sessions, const u_int8_t 
 void update_throughput_rtt(t_pvd_stats *stats, t_pvd_tcp_session *sess, struct timeval ts, u_int16_t win) {
 	double curr_rtt = (ts.tv_sec + ts.tv_usec * pow(10, -6)) - (sess->ts->tv_sec + sess->ts->tv_usec * pow(10, -6));
 	printf("curr_rtt: %f\n", curr_rtt);
+	t_pvd_rtt *rtt = stats->rtt;
+	if (curr_rtt < rtt->min || rtt->min == 0)
+		rtt->min = curr_rtt;
+	if (curr_rtt > rtt->max)
+		rtt->max = curr_rtt;
+	rtt->avg = ((double)(rtt->nb) * rtt->avg + curr_rtt) / (double) (rtt->nb+1);
+	++rtt->nb;
+	printf("min: %f\n", rtt->min);
+	printf("max: %f\n", rtt->max);
+	printf("avg: %f\n", rtt->avg);
+	printf("nb: %d\n", rtt->nb);
 }
 
 
