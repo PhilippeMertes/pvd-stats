@@ -33,29 +33,24 @@ typedef struct pvd_rtt {
 	double avg;
 	double max;
 	double min;
-	unsigned int nb;
 } t_pvd_rtt;
 
 typedef struct pvd_throughput {
 	double avg;
 	double max;
 	double min;
-	unsigned int nb;
 } t_pvd_throughput;
 
-typedef struct pvd_tcp_session {
+typedef struct pvd_flow {
 	u_int8_t src_ip[16];
 	u_int8_t dst_ip[16];
 	u_int16_t src_port;
 	u_int16_t dst_port;
+	u_int32_t seq;
+	u_int32_t exp_ack;
 	struct timeval *ts;
-	struct pvd_tcp_session *next;
-} t_pvd_tcp_session;
-
-typedef struct pvd_tcp {
-	t_pvd_throughput *tput;
-	unsigned int rtt;
-} t_pvd_tcp;
+	struct pvd_flow *next;
+} t_pvd_flow;
 
 typedef struct pvd_stats {
 	t_pvd_info *info;
@@ -64,7 +59,8 @@ typedef struct pvd_stats {
 	unsigned int snt_cnt;
 	t_pvd_throughput *tput;
 	t_pvd_rtt *rtt;
-	t_pvd_tcp_session *tcp_sess;
+	t_pvd_flow *flow;
+	unsigned long nb_rtt_tput;
 } t_pvd_stats;
 
 /*
@@ -144,13 +140,13 @@ void free_stats(t_pvd_stats *stats, int size) {
 		pcap_close(stats[i].pcap);
 		free(stats[i].tput);
 		free(stats[i].rtt);
-		t_pvd_tcp_session *sess = stats[i].tcp_sess;
-		t_pvd_tcp_session *next_sess;
-		while(sess != NULL) {
-			next_sess = sess->next;
-			free(sess->ts);
-			free(sess);
-			sess = next_sess;
+		t_pvd_flow *flow = stats[i].flow;
+		t_pvd_flow *next_flow;
+		while(flow != NULL) {
+			next_flow = flow->next;
+			free(flow->ts);
+			free(flow);
+			flow = next_flow;
 		}
 	}
 }
@@ -161,7 +157,7 @@ int init_stats(t_pvd_stats *stats, int size) {
 		stats[i].info = malloc(sizeof(t_pvd_info));
 		stats[i].tput = malloc(sizeof(t_pvd_throughput));
 		stats[i].rtt = malloc(sizeof(t_pvd_rtt));
-		stats[i].tcp_sess = NULL;
+		stats[i].flow = NULL;
 		if (stats[i].info == NULL || stats[i].tput == NULL || stats[i].rtt == NULL) {
 			fprintf(stderr, "Unable to allocate memory for the structure containing the PvD stats\n");
 			free_stats(stats, i);
@@ -170,11 +166,10 @@ int init_stats(t_pvd_stats *stats, int size) {
 		stats[i].tput->avg = 0;
 		stats[i].tput->min = 0;
 		stats[i].tput->max = 0;
-		stats[i].tput->nb = 0;
 		stats[i].rtt->avg = 0;
 		stats[i].rtt->min = 0;
 		stats[i].rtt->max = 0;
-		stats[i].rtt->nb = 0;
+		stats[i].nb_rtt_tput = 0;
 		stats[i].rcvd_cnt = 0;
 		stats[i].snt_cnt = 0;
 	}
@@ -197,125 +192,159 @@ void print_ip6_addr(const u_int8_t addr[16]) {
 	}
 }
 
-int add_tcp_session(t_pvd_stats *stats, const u_int8_t src_ip[16], const u_int8_t dst_ip[16],
-	const u_int16_t src_port, const u_int16_t dst_port, const struct timeval ts) {
+int add_flow(t_pvd_stats *stats, const u_int8_t src_ip[16], const u_int8_t dst_ip[16],
+	const u_int16_t src_port, const u_int16_t dst_port, const u_int32_t seq, const u_int32_t exp_ack, const struct timeval ts) {
+	int empty_list = 0;
 	// if there is no element in the linked list
-	if (stats->tcp_sess == NULL) {
-		stats->tcp_sess = malloc(sizeof(t_pvd_tcp_session));
-		if (stats->tcp_sess == NULL) {
-			fprintf(stderr, "Unable to allocate memory to store the session\n");
+	if (stats->flow == NULL) {
+		++empty_list;
+		stats->flow = malloc(sizeof(t_pvd_flow));
+		if (stats->flow == NULL) {
+			fprintf(stderr, "Unable to allocate memory to store the network flow information\n");
 			return EXIT_FAILURE;
 		}
-		stats->tcp_sess->ts = malloc(sizeof(struct timeval));
-		if (stats->tcp_sess->ts == NULL) {
-			fprintf(stderr, "Unable to allocate memory to store the session\n");
-			return EXIT_FAILURE;
-		}
-		memcpy(stats->tcp_sess->src_ip, src_ip, 16);
-		memcpy(stats->tcp_sess->dst_ip, dst_ip, 16);
-		stats->tcp_sess->src_port = src_port;
-		stats->tcp_sess->dst_port = dst_port;
-		stats->tcp_sess->ts->tv_sec = ts.tv_sec;
-		stats->tcp_sess->ts->tv_usec = ts.tv_usec;
-		stats->tcp_sess->next = NULL;
+		stats->flow->next = NULL;
 	}
 
-	t_pvd_tcp_session *sess = stats->tcp_sess;
-	t_pvd_tcp_session *prev_sess = NULL;
+	t_pvd_flow *flow = stats->flow;
+	t_pvd_flow *prev_flow = NULL;
 	/* get to the last element of the linked list,
 	   while deleting elements with a timestamp older than TIMEOUT */
-	while (sess->next != NULL) {
-		if (ts.tv_sec - sess->ts->tv_sec > TIMEOUT) {
-			// the first element is outdated
-			if (prev_sess == NULL) {
-				stats->tcp_sess = sess->next;
-				free(sess->ts);
-				free(sess);
-				sess = stats->tcp_sess;
-			} // an element in the middle
+	while (flow->next != NULL) {
+		if (ts.tv_sec - flow->ts->tv_sec > TIMEOUT) {
+			// the first element should be removed
+			if (prev_flow == NULL) {
+				stats->flow = flow->next;
+				free(flow->ts);
+				free(flow);
+				flow = stats->flow;
+			} // an element in the middle will be removed
 			else {
-				prev_sess->next = sess->next;
-				free(sess->ts);
-				free(sess);
-				sess = prev_sess->next;
+				prev_flow->next = flow->next;
+				free(flow->ts);
+				free(flow);
+				flow = prev_flow->next;
 			}
 		} // the element is up-to-date
 		else {
-			prev_sess = sess;
-			sess = sess->next;
+			prev_flow = flow;
+			flow = flow->next;
 		}
 	}
 
-	// allocate memory
-	sess->next = malloc(sizeof(t_pvd_tcp_session));
-	if (sess->next == NULL) {
-		fprintf(stderr, "Unable to allocate memory to store the session\n");
-		return EXIT_FAILURE;
+	if (!empty_list) {
+		// allocate memory
+		flow->next = malloc(sizeof(t_pvd_flow));
+		if (flow->next == NULL) {
+			fprintf(stderr, "Unable to allocate memory to store the network flow information\n");
+			return EXIT_FAILURE;
+		}
+		flow = flow->next;
 	}
-	sess = sess->next;
-	sess->ts = malloc(sizeof(struct timeval));
-	if (sess->ts == NULL) {
-		fprintf(stderr, "Unable to allocate memory to store the session\n");
+	
+	flow->ts = malloc(sizeof(struct timeval));
+	if (flow->ts == NULL) {
+		fprintf(stderr, "Unable to allocate memory to store the network flow information\n");
 		return EXIT_FAILURE;
 	}
 
 	// add values to the new element
-	memcpy(sess->src_ip, src_ip, 16);
-	memcpy(sess->dst_ip, dst_ip, 16);
-	sess->src_port = src_port;
-	sess->dst_port = dst_port;
-	sess->ts->tv_sec = ts.tv_sec;
-	sess->ts->tv_usec = ts.tv_usec;
-	sess->next = NULL;
+	memcpy(flow->src_ip, src_ip, 16);
+	memcpy(flow->dst_ip, dst_ip, 16);
+	flow->src_port = src_port;
+	flow->dst_port = dst_port;
+	flow->seq = seq;
+	flow->exp_ack = exp_ack;
+	flow->ts->tv_sec = ts.tv_sec;
+	flow->ts->tv_usec = ts.tv_usec;
+	flow->next = NULL;
 
 	return EXIT_SUCCESS;
 }
 
-
-t_pvd_tcp_session *find_tcp_session(t_pvd_tcp_session *sessions, const u_int8_t src_ip[16], const u_int8_t dst_ip[16],
-	const u_int16_t src_port, const u_int16_t dst_port) {
-	t_pvd_tcp_session *sess = sessions;
-	printf("[");
-
-	while(sess != NULL) {	
-		printf("(");
-		print_ip6_addr(sess->src_ip);
-		printf(", ");
-		print_ip6_addr(sess->dst_ip);
-		printf(", %d, %d, %ld, %ld) ", sess->src_port, sess->dst_port, sess->ts->tv_sec, sess->ts->tv_usec);
-		if (!memcmp(sess->src_ip, src_ip, 16) && !memcmp(sess->dst_ip, dst_ip, 16)
-			&& sess->src_port == src_port && sess->dst_port == dst_port)
+void remove_flow(t_pvd_stats *stats, t_pvd_flow *flow_to_rem) {
+	t_pvd_flow *flow = stats->flow;
+	t_pvd_flow *prev_flow = NULL;
+	
+	while (flow != NULL) {
+		// if we found the element to remove
+		if (flow == flow_to_rem) {
+			// the first element should be removed
+			if (prev_flow == NULL) {
+				stats->flow = flow->next;
+				free(flow->ts);
+				free(flow);
+				flow = stats->flow;
+			} // an element in the middle will be removed
+			else {
+				prev_flow->next = flow->next;
+				free(flow->ts);
+				free(flow);
+				flow = prev_flow->next;
+			}
 			break;
-		sess = sess->next;
+		} // visit the next element
+		else {
+			prev_flow = flow;
+			flow = flow->next;
+		}
 	}
-	printf("]\n");
-	return sess;
 }
 
-void update_throughput_rtt(t_pvd_stats *stats, t_pvd_tcp_session *sess, struct timeval ts, u_int16_t win) {
-	double curr_rtt = (ts.tv_sec + ts.tv_usec * pow(10, -6)) - (sess->ts->tv_sec + sess->ts->tv_usec * pow(10, -6));
+
+t_pvd_flow *find_flow(t_pvd_flow *flow, const u_int8_t src_ip[16], const u_int8_t dst_ip[16],
+	const u_int16_t src_port, const u_int16_t dst_port, const u_int32_t ack) {
+
+	while(flow != NULL) {	
+		if (!memcmp(flow->src_ip, src_ip, 16) && !memcmp(flow->dst_ip, dst_ip, 16)
+			&& flow->src_port == src_port && flow->dst_port == dst_port && flow->exp_ack == ack)
+			break;
+		flow = flow->next;
+	}
+
+	return flow;
+}
+
+
+void print_flow(t_pvd_flow *flow) {
+	printf("[");
+
+	while(flow != NULL) {	
+		printf("\n(");
+		print_ip6_addr(flow->src_ip);
+		printf(", ");
+		print_ip6_addr(flow->dst_ip);
+		printf(", %d, %d, %u, %u, %ld, %ld)", flow->src_port, flow->dst_port, flow->seq, flow->exp_ack,
+			flow->ts->tv_sec, flow->ts->tv_usec);
+		flow = flow->next;
+	}
+	printf("\n]\n");
+
+}
+
+void update_throughput_rtt(t_pvd_stats *stats, t_pvd_flow *flow, struct timeval ts) {
+	double curr_rtt = (ts.tv_sec + ts.tv_usec * pow(10, -6)) - (flow->ts->tv_sec + flow->ts->tv_usec * pow(10, -6));
 	printf("curr_rtt: %f\n", curr_rtt);
 	t_pvd_rtt *rtt = stats->rtt;
 	rtt->min = (curr_rtt < rtt->min || rtt->min == 0) ? curr_rtt : rtt->min;
 	rtt->max = (curr_rtt > rtt->max) ? curr_rtt: rtt->max;
-	rtt->avg = ((double)(rtt->nb) * rtt->avg + curr_rtt) / (double) (rtt->nb+1);
-	++rtt->nb;
+	rtt->avg = ((double)(stats->nb_rtt_tput) * rtt->avg + curr_rtt) / (double) (stats->nb_rtt_tput+1);
 	printf("min: %f\n", rtt->min);
 	printf("max: %f\n", rtt->max);
 	printf("avg: %f\n", rtt->avg);
-	printf("nb: %d\n", rtt->nb);
 
-	double curr_tput = (double) win / curr_rtt;
+	double curr_tput = ((double) flow->exp_ack - flow->seq) / curr_rtt;
 	t_pvd_throughput *tput = stats->tput;
 
 	tput->min = (curr_tput < tput->min || tput->min == 0) ? curr_tput : tput->min;
 	tput->max = (curr_tput > tput->max) ? curr_tput : tput->max;
-	tput->avg = ((double)(tput->nb) * tput->avg + curr_tput) / (double) (tput->nb+1);
-	++tput->nb;
+	tput->avg = ((double)(stats->nb_rtt_tput) * tput->avg + curr_tput) / (double) (stats->nb_rtt_tput+1);
+	++stats->nb_rtt_tput;
+	printf("curr_tput: %f\n", curr_tput);
 	printf("min: %f\n", tput->min);
 	printf("max: %f\n", tput->max);
 	printf("avg: %f\n", tput->avg);
-	printf("nb: %d\n", tput->nb);
+	printf("nb: %ld\n", stats->nb_rtt_tput);
 }
 
 
@@ -356,29 +385,37 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 		printf("source port: %d\n", ntohs(tcp->source));
 		printf("dest port: %d\n", ntohs(tcp->dest));
 		printf("window: %d\n", ntohs(tcp->window));
+		printf("data offset: %d\n", tcp->doff);
+		printf("SEQ: %u\n", ntohl(tcp->seq));
+		printf("ACK_SEQ: %u\n", ntohl(tcp->ack_seq));
 		printf("SYN: %d\n", tcp->syn);
 		printf("ACK: %d\n", tcp->ack);
 		printf("FIN: %d\n", tcp->fin);
-		t_pvd_tcp_session *sess;
-		
-		// packet sent by the client
-		if (!rcvd) {
-			sess = find_tcp_session(stats->tcp_sess, ip->ip6_src.s6_addr, ip->ip6_dst.s6_addr, ntohs(tcp->source), ntohs(tcp->dest));
-			if (!sess)
-				add_tcp_session(stats, ip->ip6_src.s6_addr, ip->ip6_dst.s6_addr, ntohs(tcp->source), ntohs(tcp->dest), pkthdr->ts);
-			else {
-				// update timestamp of the session
-				printf("Known session. Timestamp gets updated\n");
-				sess->ts->tv_sec = pkthdr->ts.tv_sec;
-				sess->ts->tv_usec = pkthdr->ts.tv_usec;
-			}
+
+		// we don't take TCP handshake flows into account
+		if (tcp->syn)
+			return;
+
+		// find the flow to which we ack
+		t_pvd_flow *flow = find_flow(stats->flow, ip->ip6_dst.s6_addr, ip->ip6_src.s6_addr,
+			ntohs(tcp->dest), ntohs(tcp->source), ntohl(tcp->ack_seq));
+		print_flow(stats->flow);
+
+		if (flow) {
+			printf("Flow found. Calculating throughput and RTT\n");
+			update_throughput_rtt(stats, flow, pkthdr->ts);
+			remove_flow(stats, flow);
 		}
-		// packet received
-		else {
-			sess = find_tcp_session(stats->tcp_sess, ip->ip6_dst.s6_addr, ip->ip6_src.s6_addr, ntohs(tcp->dest), ntohs(tcp->source));
-			if (sess && !tcp->syn)
-				update_throughput_rtt(stats, sess, pkthdr->ts, tcp->window);
-		}
+
+		// calculate expected ACK
+		u_int32_t seq = ntohl(tcp->seq);
+		u_int32_t ack = seq;
+		ack += pkthdr->len - LEN_SLL - LEN_IPV6 - tcp->doff * 4; // TCP payload
+		printf("Expected ack: %u\n", ack);
+		// If the packet contains no payload, it doesn't need to be acked by the other side.
+		// Thus, we don't need to keep track of it.
+		if (seq != ack)
+			add_flow(stats, ip->ip6_src.s6_addr, ip->ip6_dst.s6_addr, ntohs(tcp->source), ntohs(tcp->dest), seq, ack, pkthdr->ts);
 	}
 	printf("\n");
 }
@@ -439,7 +476,7 @@ int main(int argc, char **argv) {
 	if (init_stats(stats, stats_size))
 		exit(0);
 	stats[0].info->addr = calloc(2, sizeof(char *));
-	stats[0].info->addr[0] = "2a02:a03f:434a:4300:c1f6:d20d:1526:44be";
+	stats[0].info->addr[0] = "2a02:a03f:4286:df00:c1f6:d20d:1526:44be";
 
 	for (int i = 0; i < stats_size; ++i) {
 		// As we're capturing on all the interfaces, the data link type will be LINKTYPE_LINUX_SLL.
