@@ -29,17 +29,12 @@ typedef struct pvd_info {
 	char **addr;
 } t_pvd_info;
 
-typedef struct pvd_rtt {
+typedef struct pvd_max_min_avg {
 	double avg;
 	double max;
 	double min;
-} t_pvd_rtt;
-
-typedef struct pvd_throughput {
-	double avg;
-	double max;
-	double min;
-} t_pvd_throughput;
+	unsigned long nb;
+} t_pvd_max_min_avg;
 
 typedef struct pvd_flow {
 	u_int8_t src_ip[16];
@@ -55,12 +50,15 @@ typedef struct pvd_flow {
 typedef struct pvd_stats {
 	t_pvd_info *info;
 	pcap_t *pcap;
-	unsigned int rcvd_cnt;
-	unsigned int snt_cnt;
-	t_pvd_throughput *tput;
-	t_pvd_rtt *rtt;
+	unsigned long rcvd_cnt;
+	unsigned long snt_cnt;
+	t_pvd_max_min_avg *tput;
+	t_pvd_max_min_avg *tput_up;
+	t_pvd_max_min_avg *tput_dwn;
+	t_pvd_max_min_avg *rtt;
+	t_pvd_max_min_avg *rtt_up;
+	t_pvd_max_min_avg *rtt_dwn;
 	t_pvd_flow *flow;
-	unsigned long nb_rtt_tput;
 } t_pvd_stats;
 
 /*
@@ -139,7 +137,11 @@ void free_stats(t_pvd_stats *stats, int size) {
 		free(info);
 		pcap_close(stats[i].pcap);
 		free(stats[i].tput);
+		free(stats[i].tput_up);
+		free(stats[i].tput_dwn);
 		free(stats[i].rtt);
+		free(stats[i].rtt_up);
+		free(stats[i].rtt_dwn);
 		t_pvd_flow *flow = stats[i].flow;
 		t_pvd_flow *next_flow;
 		while(flow != NULL) {
@@ -155,8 +157,12 @@ void free_stats(t_pvd_stats *stats, int size) {
 int init_stats(t_pvd_stats *stats, int size) {
 	for (int i = 0; i < size; ++i) {
 		stats[i].info = malloc(sizeof(t_pvd_info));
-		stats[i].tput = malloc(sizeof(t_pvd_throughput));
-		stats[i].rtt = malloc(sizeof(t_pvd_rtt));
+		stats[i].tput = malloc(sizeof(t_pvd_max_min_avg));
+		stats[i].tput_up = malloc(sizeof(t_pvd_max_min_avg));
+		stats[i].tput_dwn = malloc(sizeof(t_pvd_max_min_avg));
+		stats[i].rtt = malloc(sizeof(t_pvd_max_min_avg));
+		stats[i].rtt_up = malloc(sizeof(t_pvd_max_min_avg));
+		stats[i].rtt_dwn = malloc(sizeof(t_pvd_max_min_avg));
 		stats[i].flow = NULL;
 		if (stats[i].info == NULL || stats[i].tput == NULL || stats[i].rtt == NULL) {
 			fprintf(stderr, "Unable to allocate memory for the structure containing the PvD stats\n");
@@ -166,10 +172,27 @@ int init_stats(t_pvd_stats *stats, int size) {
 		stats[i].tput->avg = 0;
 		stats[i].tput->min = 0;
 		stats[i].tput->max = 0;
+		stats[i].tput->nb = 0;
+		stats[i].tput_up->avg = 0;
+		stats[i].tput_up->min = 0;
+		stats[i].tput_up->max = 0;
+		stats[i].tput_up->nb = 0;
+		stats[i].tput_dwn->avg = 0;
+		stats[i].tput_dwn->min = 0;
+		stats[i].tput_dwn->max = 0;
+		stats[i].tput_dwn->nb = 0;
 		stats[i].rtt->avg = 0;
 		stats[i].rtt->min = 0;
 		stats[i].rtt->max = 0;
-		stats[i].nb_rtt_tput = 0;
+		stats[i].rtt->nb = 0;
+		stats[i].rtt_up->avg = 0;
+		stats[i].rtt_up->min = 0;
+		stats[i].rtt_up->max = 0;
+		stats[i].rtt_up->nb = 0;
+		stats[i].rtt_dwn->avg = 0;
+		stats[i].rtt_dwn->min = 0;
+		stats[i].rtt_dwn->max = 0;
+		stats[i].rtt_dwn->nb = 0;
 		stats[i].rcvd_cnt = 0;
 		stats[i].snt_cnt = 0;
 	}
@@ -322,29 +345,27 @@ void print_flow(t_pvd_flow *flow) {
 
 }
 
-void update_throughput_rtt(t_pvd_stats *stats, t_pvd_flow *flow, struct timeval ts) {
-	double curr_rtt = (ts.tv_sec + ts.tv_usec * pow(10, -6)) - (flow->ts->tv_sec + flow->ts->tv_usec * pow(10, -6));
+void update_throughput_rtt(t_pvd_max_min_avg *tput, t_pvd_max_min_avg *rtt, t_pvd_flow *flow, struct timeval ts) {
+	double curr_rtt = (ts.tv_sec + ts.tv_usec * pow(10, -6)) - (flow->ts->tv_sec + flow->ts->tv_usec * pow(10, -6)); // RTT in secs
 	printf("curr_rtt: %f\n", curr_rtt);
-	t_pvd_rtt *rtt = stats->rtt;
 	rtt->min = (curr_rtt < rtt->min || rtt->min == 0) ? curr_rtt : rtt->min;
 	rtt->max = (curr_rtt > rtt->max) ? curr_rtt: rtt->max;
-	rtt->avg = ((double)(stats->nb_rtt_tput) * rtt->avg + curr_rtt) / (double) (stats->nb_rtt_tput+1);
+	rtt->avg = ((double)(rtt->nb) * rtt->avg + curr_rtt) / (double) (rtt->nb+1);
 	printf("min: %f\n", rtt->min);
 	printf("max: %f\n", rtt->max);
 	printf("avg: %f\n", rtt->avg);
+	++rtt->nb;
 
-	double curr_tput = ((double) flow->exp_ack - flow->seq) / curr_rtt;
-	t_pvd_throughput *tput = stats->tput;
-
+	double curr_tput = ((double) flow->exp_ack - (double) flow->seq) * 8 / (curr_rtt * pow(10, 6)); // throughput in Mbits/sec
 	tput->min = (curr_tput < tput->min || tput->min == 0) ? curr_tput : tput->min;
 	tput->max = (curr_tput > tput->max) ? curr_tput : tput->max;
-	tput->avg = ((double)(stats->nb_rtt_tput) * tput->avg + curr_tput) / (double) (stats->nb_rtt_tput+1);
-	++stats->nb_rtt_tput;
+	tput->avg = ((double)(tput->nb) * tput->avg + curr_tput) / (double) (tput->nb+1);
+	++tput->nb;
+	printf("Segment length: %u\n", flow->exp_ack - flow->seq);
 	printf("curr_tput: %f\n", curr_tput);
 	printf("min: %f\n", tput->min);
 	printf("max: %f\n", tput->max);
 	printf("avg: %f\n", tput->avg);
-	printf("nb: %ld\n", stats->nb_rtt_tput);
 }
 
 
@@ -399,11 +420,20 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 		// find the flow to which we ack
 		t_pvd_flow *flow = find_flow(stats->flow, ip->ip6_dst.s6_addr, ip->ip6_src.s6_addr,
 			ntohs(tcp->dest), ntohs(tcp->source), ntohl(tcp->ack_seq));
-		print_flow(stats->flow);
+		//print_flow(stats->flow);
 
 		if (flow) {
 			printf("Flow found. Calculating throughput and RTT\n");
-			update_throughput_rtt(stats, flow, pkthdr->ts);
+			update_throughput_rtt(stats->tput, stats->rtt, flow, pkthdr->ts);
+			// if we received the packet, then it is an ACK to an uploaded packet
+			if (rcvd) {
+				printf("UPLOAD\n");
+				update_throughput_rtt(stats->tput_up, stats->rtt_up, flow, pkthdr->ts);
+			}
+			else {
+				printf("DOWNLOAD\n");
+				update_throughput_rtt(stats->tput_dwn, stats->rtt_dwn, flow, pkthdr->ts);
+			}
 			remove_flow(stats, flow);
 		}
 
