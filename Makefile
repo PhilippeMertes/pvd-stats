@@ -7,7 +7,7 @@ LIBS = -lpcap -ljson-c
 all : pvd-stats
 
 pvd-stats:
-	$(CC) pvd-stats.c json-handler.c -o pvd-stats $(CFLAGS) $(LIBS)
+	$(CC) pvd-stats.c json-handler.c stats.c -o pvd-stats $(CFLAGS) $(LIBS)
 	
 clean :
 	/bin/rm -f pvd-stats
