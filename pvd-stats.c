@@ -3,7 +3,8 @@
 #include <stdio.h> 
 #include <stdlib.h> 
 #include <errno.h> 
-#include <sys/socket.h> 
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <netinet/in.h> 
 #include <arpa/inet.h> 
 #include <json-c/json.h>
@@ -12,6 +13,8 @@
 #include <netinet/ip6.h>
 #include <linux/tcp.h>
 #include <math.h>
+#include <unistd.h>
+#include <pthread.h>
 
 #include "json-handler.h"
 #include "stats.h"
@@ -19,6 +22,10 @@
 #define PVDD_PORT 10101
 #define LEN_SLL 16
 #define LEN_IPV6 40
+#define SOCKET_FILE "/tmp/pvd-stats.uds"
+#define SOCKET_BUFSIZE 1024
+
+pthread_mutex_t mutex_stats;
 
 /*
 t_pvd_list *get_pvd_list() {
@@ -123,7 +130,7 @@ void print_flow(t_pvd_flow *flow) {
 void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char *packet) {
 	t_pvd_stats *stats = (t_pvd_stats *) args;
 
-	printf("ts_sec = %ld, ts_usec = %ld, len = %d\n", pkthdr->ts.tv_sec, pkthdr->ts.tv_usec, pkthdr->len);
+	//printf("ts_sec = %ld, ts_usec = %ld, len = %d\n", pkthdr->ts.tv_sec, pkthdr->ts.tv_usec, pkthdr->len);
 	// ==== link-layer header ====
 	struct linux_sll *sll = (struct linux_sll *) packet;
 	// packet received or sent
@@ -140,12 +147,14 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 
 	// ==== network-layer header ====
 	struct ip6_hdr *ip = (struct ip6_hdr *) &packet[LEN_SLL];
+	/*
 	printf("src ip: ");
 	print_ip6_addr(ip->ip6_src.s6_addr);
 	printf("\n");
 	printf("dst ip: ");
 	print_ip6_addr(ip->ip6_dst.s6_addr);
 	printf("\n");
+	*/
 
 	// check if packet contains some transport-layer payload
 	if (ntohs(ip->ip6_plen) == 0)
@@ -154,6 +163,7 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 	// ==== TCP transport-layer ====
 	if (ip->ip6_nxt == IPPROTO_TCP) {
 		struct tcphdr *tcp = (struct tcphdr *) &packet[LEN_SLL+LEN_IPV6];
+		/*
 		printf("source port: %d\n", ntohs(tcp->source));
 		printf("dest port: %d\n", ntohs(tcp->dest));
 		printf("window: %d\n", ntohs(tcp->window));
@@ -163,42 +173,48 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 		printf("SYN: %d\n", tcp->syn);
 		printf("ACK: %d\n", tcp->ack);
 		printf("FIN: %d\n", tcp->fin);
+		*/
 
 		// we don't take TCP handshake flows into account
 		if (tcp->syn)
 			return;
 
 		// find the flow to which we ack
+		pthread_mutex_lock(&mutex_stats);
 		t_pvd_flow *flow = find_flow(stats->flow, ip->ip6_dst.s6_addr, ip->ip6_src.s6_addr,
 			ntohs(tcp->dest), ntohs(tcp->source), ntohl(tcp->ack_seq));
 		//print_flow(stats->flow);
 
 		if (flow) {
-			printf("Flow found. Calculating throughput and RTT\n");
+			//printf("Flow found. Calculating throughput and RTT\n");
 			update_throughput_rtt(stats->tput, stats->rtt, flow, pkthdr->ts);
 			// if we received the packet, then it is an ACK to an uploaded packet
 			if (rcvd) {
-				printf("UPLOAD\n");
+				//printf("UPLOAD\n");
 				update_throughput_rtt(stats->tput_up, stats->rtt_up, flow, pkthdr->ts);
 			}
 			else {
-				printf("DOWNLOAD\n");
+				//printf("DOWNLOAD\n");
 				update_throughput_rtt(stats->tput_dwn, stats->rtt_dwn, flow, pkthdr->ts);
 			}
 			remove_flow(stats, flow);
 		}
+		pthread_mutex_unlock(&mutex_stats);
 
 		// calculate expected ACK
 		u_int32_t seq = ntohl(tcp->seq);
 		u_int32_t ack = seq;
 		ack += pkthdr->len - LEN_SLL - LEN_IPV6 - tcp->doff * 4; // TCP payload
-		printf("Expected ack: %u\n", ack);
+		//printf("Expected ack: %u\n", ack);
 		// If the packet contains no payload, it doesn't need to be acked by the other side.
 		// Thus, we don't need to keep track of it.
-		if (seq != ack)
+		if (seq != ack) {
+			pthread_mutex_lock(&mutex_stats);
 			add_flow(stats, ip->ip6_src.s6_addr, ip->ip6_dst.s6_addr, ntohs(tcp->source), ntohs(tcp->dest), seq, ack, pkthdr->ts);
+			pthread_mutex_unlock(&mutex_stats);
+		}
 	}
-	printf("\n");
+	//printf("\n");
 }
 
 
@@ -220,7 +236,89 @@ char *construct_filter(char **addr) {
 }
 
 
+static int create_local_socket() {
+	int s;
+	struct sockaddr_un addr;
+
+	if ((s = socket(AF_LOCAL, SOCK_STREAM, 0)) == -1)
+		return -1;
+
+	unlink(SOCKET_FILE);
+
+	addr.sun_family = AF_LOCAL;
+	strcpy(addr.sun_path, SOCKET_FILE);
+	if (bind(s, (struct sockaddr *) &addr, sizeof(addr))){
+		close(s);
+		return -1;
+	}
+
+	if (listen(s, 10)) {
+		close(s);
+		return -1;
+	}
+
+	return s;
+}
+
+
+static void handle_socket_connection(int welcome_sock) {
+	int sock;
+	struct sockaddr_in addr;
+	socklen_t addr_len;
+	char *buffer = malloc(SOCKET_BUFSIZE);
+	ssize_t size;
+	char *json;
+
+	addr_len = sizeof(struct sockaddr_in);
+
+	if ((sock = accept(welcome_sock, (struct sockaddr *) &addr, &addr_len)) <= 0) {
+		fprintf(stderr, "Error while accepting client connection: %s\n", strerror(errno));
+		return;
+	}
+
+	size = recv(sock, buffer, SOCKET_BUFSIZE-1, 0);
+	if (size < 0) {
+		fprintf(stderr, "Error while reading message sent to the socket: %s\n", strerror(errno));
+		return;
+	}
+
+	buffer[size] = '\0';
+	printf("Message received: %s\n", buffer);
+
+	if (strcmp(buffer, "all") == 0) {
+		json = json_handler_all_stats();
+	}
+	else if (strcmp(buffer, "rtt") == 0) {
+		json = json_handler_rtt();
+	}
+	else if (strcmp(buffer, "tput") == 0) {
+		json = json_handler_tput();
+	}
+	
+	close(sock);
+}
+
+
+void *socket_communication() {
+	int welcome_sock = create_local_socket();
+	if (welcome_sock < 0) {
+		perror("Unable to create local welcome socket\n");
+		exit(EXIT_FAILURE);
+	}
+
+	while(1) {
+		handle_socket_connection(welcome_sock);
+	}
+	
+	close(welcome_sock);
+	pthread_exit(NULL);
+}
+
+
 int main(int argc, char **argv) {
+	pthread_t thread;
+	pthread_attr_t thread_attr;
+
 	// ==== collect PvD information ====
 	/*
 	t_pvd_list *pvd_list = get_pvd_list();
@@ -245,6 +343,16 @@ int main(int argc, char **argv) {
 	free(pvd_list);
 	*/
 
+
+	// Thread handling communication with other applications using local UNIX sockets
+	pthread_mutex_init(&mutex_stats, NULL);
+	pthread_attr_init(&thread_attr);
+	pthread_attr_setdetachstate(&thread_attr, PTHREAD_CREATE_DETACHED);
+	if (pthread_create(&thread, &thread_attr, socket_communication, NULL)) {
+		fprintf(stderr, "Unable to create thread handling socket communication\n");
+		exit(EXIT_FAILURE);
+	}
+	pthread_attr_destroy(&thread_attr);
 
 	// ==== Packet capturing ====
 	char errbuf[PCAP_ERRBUF_SIZE];
@@ -287,13 +395,16 @@ int main(int argc, char **argv) {
 			perror("Error while setting the packet filter\n");
 			exit(2);
 		}
-		
-		pcap_loop(stats[i].pcap, -1, pcap_callback, (u_char*) &stats[i]);
 
 		free(filter);
+				
+		pcap_loop(stats[i].pcap, -1, pcap_callback, (u_char*) &stats[i]);
+		
 	}
 
 	free_stats(stats, stats_size);
+	pthread_mutex_destroy(&mutex_stats);
+	pthread_exit(NULL);
 
 	return EXIT_SUCCESS;
 }

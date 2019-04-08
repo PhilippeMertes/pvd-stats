@@ -1,13 +1,16 @@
 CC = gcc
 CFLAGS = -Wall -g -O2
-LIBS = -lpcap -ljson-c
+LIBS = -lpcap -ljson-c -lpthread
 
-.PHONY: all pvd-stats
+.PHONY: all pvd-stats client-test
 
-all : pvd-stats
+all : pvd-stats client-test
 
 pvd-stats:
 	$(CC) pvd-stats.c json-handler.c stats.c -o pvd-stats $(CFLAGS) $(LIBS)
+
+client-test:
+	$(CC) client_test.c -o client-test $(CFLAGS) $(LIBS)
 	
 clean :
-	/bin/rm -f pvd-stats
+	/bin/rm -f pvd-stats client-test

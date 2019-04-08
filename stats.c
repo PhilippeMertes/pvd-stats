@@ -209,13 +209,15 @@ t_pvd_flow *find_flow(t_pvd_flow *flow, const u_int8_t src_ip[16], const u_int8_
 
 void update_throughput_rtt(t_pvd_max_min_avg *tput, t_pvd_max_min_avg *rtt, t_pvd_flow *flow, struct timeval ts) {
 	double curr_rtt = (ts.tv_sec + ts.tv_usec * pow(10, -6)) - (flow->ts->tv_sec + flow->ts->tv_usec * pow(10, -6)); // RTT in secs
-	printf("curr_rtt: %f\n", curr_rtt);
+	//printf("curr_rtt: %f\n", curr_rtt);
 	rtt->min = (curr_rtt < rtt->min || rtt->min == 0) ? curr_rtt : rtt->min;
 	rtt->max = (curr_rtt > rtt->max) ? curr_rtt: rtt->max;
 	rtt->avg = ((double)(rtt->nb) * rtt->avg + curr_rtt) / (double) (rtt->nb+1);
+	/*
 	printf("min: %f\n", rtt->min);
 	printf("max: %f\n", rtt->max);
 	printf("avg: %f\n", rtt->avg);
+	*/
 	++rtt->nb;
 
 	double curr_tput = ((double) flow->exp_ack - (double) flow->seq) * 8 / (curr_rtt * pow(10, 6)); // throughput in Mbits/sec
@@ -223,9 +225,11 @@ void update_throughput_rtt(t_pvd_max_min_avg *tput, t_pvd_max_min_avg *rtt, t_pv
 	tput->max = (curr_tput > tput->max) ? curr_tput : tput->max;
 	tput->avg = ((double)(tput->nb) * tput->avg + curr_tput) / (double) (tput->nb+1);
 	++tput->nb;
+	/*
 	printf("Segment length: %u\n", flow->exp_ack - flow->seq);
 	printf("curr_tput: %f\n", curr_tput);
 	printf("min: %f\n", tput->min);
 	printf("max: %f\n", tput->max);
 	printf("avg: %f\n", tput->avg);
+	*/
 }

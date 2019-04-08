@@ -111,3 +111,17 @@ char **json_handler_parse_addr_array(const char *json_str) {
 	json_object_put(jobj);
 	return addr;
 }
+
+
+char *json_handler_all_stats() {
+	json_object *json = json_object_new_object();
+	return NULL;
+}
+
+char *json_handler_rtt() {
+	return NULL;
+}
+
+char *json_handler_tput() {
+	return NULL;
+}
