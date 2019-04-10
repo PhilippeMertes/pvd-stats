@@ -14,7 +14,7 @@
 #include <linux/tcp.h>
 #include <math.h>
 #include <unistd.h>
-//#include <pthread.h>
+#include <pthread.h>
 
 #include "json-handler.h"
 #include "stats.h"
@@ -25,7 +25,7 @@
 #define SOCKET_FILE "/tmp/pvd-stats.uds"
 #define SOCKET_BUFSIZE 1024
 
-//pthread_mutex_t mutex_stats;
+pthread_mutex_t mutex_stats;
 static t_pvd_stats **stats;
 
 /*
@@ -181,7 +181,7 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 			return;
 
 		// find the flow to which we ack
-		//pthread_mutex_lock(&mutex_stats);
+		pthread_mutex_lock(&mutex_stats);
 		t_pvd_flow *flow = find_flow(stats->flow, ip->ip6_dst.s6_addr, ip->ip6_src.s6_addr,
 			ntohs(tcp->dest), ntohs(tcp->source), ntohl(tcp->ack_seq));
 		//print_flow(stats->flow);
@@ -200,7 +200,7 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 			}
 			remove_flow(stats, flow);
 		}
-		//pthread_mutex_unlock(&mutex_stats);
+		pthread_mutex_unlock(&mutex_stats);
 
 		// calculate expected ACK
 		u_int32_t seq = ntohl(tcp->seq);
@@ -210,9 +210,9 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 		// If the packet contains no payload, it doesn't need to be acked by the other side.
 		// Thus, we don't need to keep track of it.
 		if (seq != ack) {
-			//pthread_mutex_lock(&mutex_stats);
+			pthread_mutex_lock(&mutex_stats);
 			add_flow(stats, ip->ip6_src.s6_addr, ip->ip6_dst.s6_addr, ntohs(tcp->source), ntohs(tcp->dest), seq, ack, pkthdr->ts);
-			//pthread_mutex_unlock(&mutex_stats);
+			pthread_mutex_unlock(&mutex_stats);
 		}
 	}
 	//printf("\n");
@@ -314,7 +314,7 @@ void *socket_communication() {
 	}
 	
 	close(welcome_sock);
-	//pthread_exit(NULL);
+	pthread_exit(NULL);
 }
 
 int init_stats(int size) {
@@ -360,8 +360,8 @@ int init_stats(int size) {
 
 
 int main(int argc, char **argv) {
-	//pthread_t thread;
-	//pthread_attr_t thread_attr;
+	pthread_t thread;
+	pthread_attr_t thread_attr;
 
 	// ==== collect PvD information ====
 	/*
@@ -400,8 +400,7 @@ int main(int argc, char **argv) {
 	stats[0]->info.addr = calloc(2, sizeof(char *));
 	stats[0]->info.addr[0] = "2a02:2788:b4:222:ecaf:f07b:54a4:b9bd";
 
-	// Thread handling communication with other applications using local UNIX sockets
-	/*
+	// Thread handling communication with other applications using local UNIX sockets	
 	pthread_mutex_init(&mutex_stats, NULL);
 	pthread_attr_init(&thread_attr);
 	pthread_attr_setdetachstate(&thread_attr, PTHREAD_CREATE_DETACHED);
@@ -410,7 +409,6 @@ int main(int argc, char **argv) {
 		exit(EXIT_FAILURE);
 	}
 	pthread_attr_destroy(&thread_attr);
-	*/
 
 	for (int i = 0; i < stats_size; ++i) {
 		// As we're capturing on all the interfaces, the data link type will be LINKTYPE_LINUX_SLL.
@@ -447,8 +445,8 @@ int main(int argc, char **argv) {
 	}
 
 	free_stats(stats, stats_size);
-	//pthread_mutex_destroy(&mutex_stats);
-	//pthread_exit(NULL);
+	pthread_mutex_destroy(&mutex_stats);
+	pthread_exit(NULL);
 
 	return EXIT_SUCCESS;
 }
