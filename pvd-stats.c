@@ -14,7 +14,7 @@
 #include <linux/tcp.h>
 #include <math.h>
 #include <unistd.h>
-#include <pthread.h>
+//#include <pthread.h>
 
 #include "json-handler.h"
 #include "stats.h"
@@ -25,7 +25,8 @@
 #define SOCKET_FILE "/tmp/pvd-stats.uds"
 #define SOCKET_BUFSIZE 1024
 
-pthread_mutex_t mutex_stats;
+//pthread_mutex_t mutex_stats;
+static t_pvd_stats **stats;
 
 /*
 t_pvd_list *get_pvd_list() {
@@ -180,26 +181,26 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 			return;
 
 		// find the flow to which we ack
-		pthread_mutex_lock(&mutex_stats);
+		//pthread_mutex_lock(&mutex_stats);
 		t_pvd_flow *flow = find_flow(stats->flow, ip->ip6_dst.s6_addr, ip->ip6_src.s6_addr,
 			ntohs(tcp->dest), ntohs(tcp->source), ntohl(tcp->ack_seq));
 		//print_flow(stats->flow);
 
 		if (flow) {
 			//printf("Flow found. Calculating throughput and RTT\n");
-			update_throughput_rtt(stats->tput, stats->rtt, flow, pkthdr->ts);
+			update_throughput_rtt(&stats->tput, &stats->rtt, flow, pkthdr->ts);
 			// if we received the packet, then it is an ACK to an uploaded packet
 			if (rcvd) {
 				//printf("UPLOAD\n");
-				update_throughput_rtt(stats->tput_up, stats->rtt_up, flow, pkthdr->ts);
+				update_throughput_rtt(&stats->tput_up, &stats->rtt_up, flow, pkthdr->ts);
 			}
 			else {
 				//printf("DOWNLOAD\n");
-				update_throughput_rtt(stats->tput_dwn, stats->rtt_dwn, flow, pkthdr->ts);
+				update_throughput_rtt(&stats->tput_dwn, &stats->rtt_dwn, flow, pkthdr->ts);
 			}
 			remove_flow(stats, flow);
 		}
-		pthread_mutex_unlock(&mutex_stats);
+		//pthread_mutex_unlock(&mutex_stats);
 
 		// calculate expected ACK
 		u_int32_t seq = ntohl(tcp->seq);
@@ -209,9 +210,9 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 		// If the packet contains no payload, it doesn't need to be acked by the other side.
 		// Thus, we don't need to keep track of it.
 		if (seq != ack) {
-			pthread_mutex_lock(&mutex_stats);
+			//pthread_mutex_lock(&mutex_stats);
 			add_flow(stats, ip->ip6_src.s6_addr, ip->ip6_dst.s6_addr, ntohs(tcp->source), ntohs(tcp->dest), seq, ack, pkthdr->ts);
-			pthread_mutex_unlock(&mutex_stats);
+			//pthread_mutex_unlock(&mutex_stats);
 		}
 	}
 	//printf("\n");
@@ -306,18 +307,61 @@ void *socket_communication() {
 		exit(EXIT_FAILURE);
 	}
 
+	printf("socket snt_cnt: %ld\n", stats[0]->snt_cnt);
+
 	while(1) {
 		handle_socket_connection(welcome_sock);
 	}
 	
 	close(welcome_sock);
-	pthread_exit(NULL);
+	//pthread_exit(NULL);
+}
+
+int init_stats(int size) {
+	stats = malloc(size * sizeof(t_pvd_stats*));
+	for (int i = 0; i < size; ++i) {
+		stats[i] = malloc(sizeof(t_pvd_stats));
+		if (stats[i] == NULL) {
+			fprintf(stderr, "Unable to allocate memory for the structure containing the PvD stats\n");
+			free_stats(stats, i);
+			return EXIT_FAILURE;
+		}
+		stats[i]->flow = NULL;
+		stats[i]->pcap = NULL;
+		stats[i]->tput.avg = 0;
+		stats[i]->tput.min = 0;
+		stats[i]->tput.max = 0;
+		stats[i]->tput.nb = 0;
+		stats[i]->tput_up.avg = 0;
+		stats[i]->tput_up.min = 0;
+		stats[i]->tput_up.max = 0;
+		stats[i]->tput_up.nb = 0;
+		stats[i]->tput_dwn.avg = 0;
+		stats[i]->tput_dwn.min = 0;
+		stats[i]->tput_dwn.max = 0;
+		stats[i]->tput_dwn.nb = 0;
+		stats[i]->rtt.avg = 0;
+		stats[i]->rtt.min = 0;
+		stats[i]->rtt.max = 0;
+		stats[i]->rtt.nb = 0;
+		stats[i]->rtt_up.avg = 0;
+		stats[i]->rtt_up.min = 0;
+		stats[i]->rtt_up.max = 0;
+		stats[i]->rtt_up.nb = 0;
+		stats[i]->rtt_dwn.avg = 0;
+		stats[i]->rtt_dwn.min = 0;
+		stats[i]->rtt_dwn.max = 0;
+		stats[i]->rtt_dwn.nb = 0;
+		stats[i]->rcvd_cnt = 0;
+		stats[i]->snt_cnt = 0;
+	}
+	return EXIT_SUCCESS;
 }
 
 
 int main(int argc, char **argv) {
-	pthread_t thread;
-	pthread_attr_t thread_attr;
+	//pthread_t thread;
+	//pthread_attr_t thread_attr;
 
 	// ==== collect PvD information ====
 	/*
@@ -343,8 +387,21 @@ int main(int argc, char **argv) {
 	free(pvd_list);
 	*/
 
+	// ==== Packet capturing ====
+	char errbuf[PCAP_ERRBUF_SIZE];
+	struct bpf_program fp;
+	char *filter;
+
+	// to be removed afterwards
+	int stats_size = 1;
+
+	if (init_stats(stats_size))
+		exit(0);
+	stats[0]->info.addr = calloc(2, sizeof(char *));
+	stats[0]->info.addr[0] = "2a02:2788:b4:222:ecaf:f07b:54a4:b9bd";
 
 	// Thread handling communication with other applications using local UNIX sockets
+	/*
 	pthread_mutex_init(&mutex_stats, NULL);
 	pthread_attr_init(&thread_attr);
 	pthread_attr_setdetachstate(&thread_attr, PTHREAD_CREATE_DETACHED);
@@ -353,58 +410,45 @@ int main(int argc, char **argv) {
 		exit(EXIT_FAILURE);
 	}
 	pthread_attr_destroy(&thread_attr);
-
-	// ==== Packet capturing ====
-	char errbuf[PCAP_ERRBUF_SIZE];
-	struct bpf_program fp;
-	char *filter;
-
-	// to be removed afterwards
-	int stats_size = 1;
-	t_pvd_stats stats[stats_size];
-	if (init_stats(stats, stats_size))
-		exit(0);
-	stats[0].info->addr = calloc(2, sizeof(char *));
-	stats[0].info->addr[0] = "fdb7:ba30:d998:0:b408:7d00:8786:c9c9";
+	*/
 
 	for (int i = 0; i < stats_size; ++i) {
 		// As we're capturing on all the interfaces, the data link type will be LINKTYPE_LINUX_SLL.
-		stats[i].pcap = pcap_open_live(NULL, BUFSIZ, 0, 0, errbuf);
-		if (stats[i].pcap == NULL) {
+		stats[i]->pcap = pcap_open_live(NULL, BUFSIZ, 0, 0, errbuf);
+		if (stats[i]->pcap == NULL) {
 			fprintf(stderr, "pcap_open_live(): %s\n", errbuf);
 			exit(2);
 		}
 
-		if (stats[i].info->addr[0] == NULL) {
-			printf("There is no address associated to the pvd %s\n", stats[i].info->name);
+		if (stats[i]->info.addr[0] == NULL) {
+			printf("There is no address associated to the pvd %s\n", stats[i]->info.name);
 			continue;
 		}
 
 		// construct packet filter
-		filter = construct_filter(stats[i].info->addr);
+		filter = construct_filter(stats[i]->info.addr);
 		printf("Packet filter: %s\n", filter);
 
 		// compile our filter
-		if (pcap_compile(stats[i].pcap, &fp, filter, 0, PCAP_NETMASK_UNKNOWN)) {
+		if (pcap_compile(stats[i]->pcap, &fp, filter, 0, PCAP_NETMASK_UNKNOWN)) {
 			perror("Error while compiling the packet filter\n");
 			exit(2);
 		}
 
 		// set the filter
-		if (pcap_setfilter(stats[i].pcap, &fp)) {
+		if (pcap_setfilter(stats[i]->pcap, &fp)) {
 			perror("Error while setting the packet filter\n");
 			exit(2);
 		}
 
 		free(filter);
-				
-		pcap_loop(stats[i].pcap, -1, pcap_callback, (u_char*) &stats[i]);
+		pcap_loop(stats[i]->pcap, -1, pcap_callback, (u_char*) stats[i]);
 		
 	}
 
 	free_stats(stats, stats_size);
-	pthread_mutex_destroy(&mutex_stats);
-	pthread_exit(NULL);
+	//pthread_mutex_destroy(&mutex_stats);
+	//pthread_exit(NULL);
 
 	return EXIT_SUCCESS;
 }

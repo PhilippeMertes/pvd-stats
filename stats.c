@@ -18,69 +18,25 @@
 #define TIMEOUT 10
 
 
-int init_stats(t_pvd_stats *stats, int size) {
-	for (int i = 0; i < size; ++i) {
-		stats[i].info = malloc(sizeof(t_pvd_info));
-		stats[i].tput = malloc(sizeof(t_pvd_max_min_avg));
-		stats[i].tput_up = malloc(sizeof(t_pvd_max_min_avg));
-		stats[i].tput_dwn = malloc(sizeof(t_pvd_max_min_avg));
-		stats[i].rtt = malloc(sizeof(t_pvd_max_min_avg));
-		stats[i].rtt_up = malloc(sizeof(t_pvd_max_min_avg));
-		stats[i].rtt_dwn = malloc(sizeof(t_pvd_max_min_avg));
-		stats[i].flow = NULL;
-		if (stats[i].info == NULL || stats[i].tput == NULL || stats[i].rtt == NULL) {
-			fprintf(stderr, "Unable to allocate memory for the structure containing the PvD stats\n");
-			free_stats(stats, i);
-			return EXIT_FAILURE;
-		}
-		stats[i].tput->avg = 0;
-		stats[i].tput->min = 0;
-		stats[i].tput->max = 0;
-		stats[i].tput->nb = 0;
-		stats[i].tput_up->avg = 0;
-		stats[i].tput_up->min = 0;
-		stats[i].tput_up->max = 0;
-		stats[i].tput_up->nb = 0;
-		stats[i].tput_dwn->avg = 0;
-		stats[i].tput_dwn->min = 0;
-		stats[i].tput_dwn->max = 0;
-		stats[i].tput_dwn->nb = 0;
-		stats[i].rtt->avg = 0;
-		stats[i].rtt->min = 0;
-		stats[i].rtt->max = 0;
-		stats[i].rtt->nb = 0;
-		stats[i].rtt_up->avg = 0;
-		stats[i].rtt_up->min = 0;
-		stats[i].rtt_up->max = 0;
-		stats[i].rtt_up->nb = 0;
-		stats[i].rtt_dwn->avg = 0;
-		stats[i].rtt_dwn->min = 0;
-		stats[i].rtt_dwn->max = 0;
-		stats[i].rtt_dwn->nb = 0;
-		stats[i].rcvd_cnt = 0;
-		stats[i].snt_cnt = 0;
-	}
-	return EXIT_SUCCESS;
-}
-
-
-void free_stats(t_pvd_stats *stats, int size) {
+void free_stats(t_pvd_stats **stats, int size) {
 	t_pvd_info *info = NULL;
 	for (int i = 0; i < size; ++i) {
-		info = stats[i].info;
+		info = &stats[i]->info;
 		free(info->name);
 		for (int j = 0; info->addr[j] != NULL; ++j) {
 			free(info->addr[j]);
 		}
-		free(info);
-		pcap_close(stats[i].pcap);
-		free(stats[i].tput);
-		free(stats[i].tput_up);
-		free(stats[i].tput_dwn);
-		free(stats[i].rtt);
-		free(stats[i].rtt_up);
-		free(stats[i].rtt_dwn);
-		t_pvd_flow *flow = stats[i].flow;
+		//free(info);
+		pcap_close(stats[i]->pcap);
+		/*
+		free(stats[i]->tput);
+		free(stats[i]->tput_up);
+		free(stats[i]->tput_dwn);
+		free(stats[i]->rtt);
+		free(stats[i]->rtt_up);
+		free(stats[i]->rtt_dwn);
+		*/
+		t_pvd_flow *flow = stats[i]->flow;
 		t_pvd_flow *next_flow;
 		while(flow != NULL) {
 			next_flow = flow->next;
