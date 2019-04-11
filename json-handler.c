@@ -118,8 +118,47 @@ char *json_handler_all_stats() {
 	return NULL;
 }
 
-char *json_handler_rtt() {
-	return NULL;
+char *json_handler_rtt(t_pvd_stats **pvd_stats, const char *pvdname, int stats_size) {
+	// ==== find stats corresponding to specified PvD =====
+	t_pvd_stats *stats = NULL;
+	char *json_str = NULL;
+	for (int i = 0; i < stats_size; ++i) {
+		if (strcmp(pvd_stats[i]->info.name, pvdname) == 0)
+			stats = pvd_stats[i];
+	}
+	if (stats == NULL)
+		return "No statistics found for the given PvD";
+
+
+	// ==== create json ====
+	json_object *json = json_object_new_object();
+
+	// download
+	json_object *jstat = json_object_new_object();
+	json_object_object_add(jstat, "min", json_object_new_double(stats->rtt_dwn.min));
+	json_object_object_add(jstat, "max", json_object_new_double(stats->rtt_dwn.max));
+	json_object_object_add(jstat, "avg", json_object_new_double(stats->rtt_dwn.avg));
+	json_object_object_add(json, "download", jstat);
+
+	// upload
+	jstat = json_object_new_object();
+	json_object_object_add(jstat, "min", json_object_new_double(stats->rtt_up.min));
+	json_object_object_add(jstat, "max", json_object_new_double(stats->rtt_up.max));
+	json_object_object_add(jstat, "avg", json_object_new_double(stats->rtt_up.avg));
+	json_object_object_add(json, "upload", jstat);
+
+	// general stats
+	jstat = json_object_new_object();
+	json_object_object_add(jstat, "min", json_object_new_double(stats->rtt.min));
+	json_object_object_add(jstat, "max", json_object_new_double(stats->rtt.max));
+	json_object_object_add(jstat, "avg", json_object_new_double(stats->rtt.avg));
+	json_object_object_add(json, "general", jstat);
+
+	// create the string to return
+	json_str = strdup(json_object_to_json_string(json));
+	json_object_put(jstat);
+	json_object_put(json);
+	return json_str;
 }
 
 char *json_handler_tput() {

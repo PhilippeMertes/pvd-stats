@@ -14,7 +14,7 @@ int main(int argc, char ** argv) {
 	int create_socket;
 
 	struct sockaddr_un addr;
-	char *msg = "tput";
+	char *msg = "rtt";
 
 	if ((create_socket = socket(PF_LOCAL, SOCK_STREAM, 0)) > 0)
 		printf("Socket successfully created\n");

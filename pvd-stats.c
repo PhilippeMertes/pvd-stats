@@ -17,7 +17,6 @@
 #include <pthread.h>
 
 #include "json-handler.h"
-#include "stats.h"
 
 #define PVDD_PORT 10101
 #define LEN_SLL 16
@@ -25,7 +24,7 @@
 #define SOCKET_FILE "/tmp/pvd-stats.uds"
 #define SOCKET_BUFSIZE 1024
 
-pthread_mutex_t mutex_stats;
+pthread_mutex_t mutex_stats = PTHREAD_MUTEX_INITIALIZER;
 static t_pvd_stats **stats;
 
 /*
@@ -191,11 +190,11 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 			update_throughput_rtt(&stats->tput, &stats->rtt, flow, pkthdr->ts);
 			// if we received the packet, then it is an ACK to an uploaded packet
 			if (rcvd) {
-				//printf("UPLOAD\n");
+				printf("UPLOAD\n");
 				update_throughput_rtt(&stats->tput_up, &stats->rtt_up, flow, pkthdr->ts);
 			}
 			else {
-				//printf("DOWNLOAD\n");
+				printf("DOWNLOAD\n");
 				update_throughput_rtt(&stats->tput_dwn, &stats->rtt_dwn, flow, pkthdr->ts);
 			}
 			remove_flow(stats, flow);
@@ -268,7 +267,7 @@ static void handle_socket_connection(int welcome_sock) {
 	socklen_t addr_len;
 	char *buffer = malloc(SOCKET_BUFSIZE);
 	ssize_t size;
-	char *json;
+	char *json = NULL;
 
 	addr_len = sizeof(struct sockaddr_in);
 
@@ -284,17 +283,26 @@ static void handle_socket_connection(int welcome_sock) {
 	}
 
 	buffer[size] = '\0';
-	printf("Message received: %s\n", buffer);
+	fprintf(stdout, "Message received: %s\n", buffer);
+	fflush(stdout);
 
-	if (strcmp(buffer, "all") == 0) {
+	pthread_mutex_lock(&mutex_stats);
+	if (strcmp(buffer, "all") == 0) {		
 		json = json_handler_all_stats();
 	}
 	else if (strcmp(buffer, "rtt") == 0) {
-		json = json_handler_rtt();
+		json = json_handler_rtt(stats, "video.mpvd.io.", 1);
 	}
 	else if (strcmp(buffer, "tput") == 0) {
 		json = json_handler_tput();
 	}
+	pthread_mutex_unlock(&mutex_stats);
+
+	if (json != NULL) {
+		printf("%s\n", json);
+	}
+
+	free(json);
 	
 	close(sock);
 }
@@ -307,8 +315,6 @@ void *socket_communication() {
 		exit(EXIT_FAILURE);
 	}
 
-	printf("socket snt_cnt: %ld\n", stats[0]->snt_cnt);
-
 	while(1) {
 		handle_socket_connection(welcome_sock);
 	}
@@ -316,6 +322,7 @@ void *socket_communication() {
 	close(welcome_sock);
 	pthread_exit(NULL);
 }
+
 
 int init_stats(int size) {
 	stats = malloc(size * sizeof(t_pvd_stats*));
@@ -397,11 +404,12 @@ int main(int argc, char **argv) {
 
 	if (init_stats(stats_size))
 		exit(0);
+	stats[0]->info.name = strdup("video.mpvd.io.");
 	stats[0]->info.addr = calloc(2, sizeof(char *));
-	stats[0]->info.addr[0] = "2a02:2788:b4:222:ecaf:f07b:54a4:b9bd";
+	stats[0]->info.addr[0] = "2a02:a03f:4286:df00:cdf8:e989:b423:5443";
 
 	// Thread handling communication with other applications using local UNIX sockets	
-	pthread_mutex_init(&mutex_stats, NULL);
+	//pthread_mutex_init(&mutex_stats, NULL);
 	pthread_attr_init(&thread_attr);
 	pthread_attr_setdetachstate(&thread_attr, PTHREAD_CREATE_DETACHED);
 	if (pthread_create(&thread, &thread_attr, socket_communication, NULL)) {

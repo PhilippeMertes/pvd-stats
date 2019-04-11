@@ -1,3 +1,5 @@
+#include <pcap.h>
+
 typedef struct pvd_info {
 	char *name;
 	char **addr;
