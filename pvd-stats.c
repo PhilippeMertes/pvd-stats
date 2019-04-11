@@ -26,6 +26,7 @@
 
 pthread_mutex_t mutex_stats = PTHREAD_MUTEX_INITIALIZER;
 static t_pvd_stats **stats;
+static int stats_size = 0;
 
 /*
 t_pvd_list *get_pvd_list() {
@@ -299,23 +300,23 @@ static void handle_socket_connection(int welcome_sock) {
 
 	pthread_mutex_lock(&mutex_stats);
 	if (strcmp(buffer, "all") == 0) {		
-		json = json_handler_all_stats(stats[0]);
+		json = json_handler_all_stats(stats, stats_size);
 	}
 	else if (strcmp(buffer, "rtt") == 0) {
-		json = json_handler_rtt_stats(stats[0]);
+		json = json_handler_rtt_stats_one_pvd(stats[0]);
 	}
 	else if (strcmp(buffer, "tput") == 0) {
-		json = json_handler_tput_stats();
+		json = json_handler_tput_stats_one_pvd(stats[0]);
 	}
 	pthread_mutex_unlock(&mutex_stats);
 
 	if (json != NULL) {
-		char *json_str = json_object_to_json_string(json);
+		char *json_str = json_object_to_json_string_ext(json, JSON_C_TO_STRING_SPACED | JSON_C_TO_STRING_PRETTY);
 		printf("%s\n", json_str);
 		free(json_str);
 	}
 
-	json_object_put(json);
+	while(!json_object_put(json));
 	free(buffer);
 	
 	close(sock);
@@ -347,6 +348,8 @@ int init_stats(int size) {
 			free_stats(stats, i);
 			return EXIT_FAILURE;
 		}
+		stats[i]->info.name = NULL;
+		stats[i]->info.addr = NULL;
 		stats[i]->flow = NULL;
 		stats[i]->pcap = NULL;
 		for (int j = 0; j < 3; ++j) {
@@ -400,7 +403,7 @@ int main(int argc, char **argv) {
 	char *filter;
 
 	// to be removed afterwards
-	int stats_size = 1;
+	stats_size = 1;
 
 	if (init_stats(stats_size))
 		exit(0);

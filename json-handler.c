@@ -113,17 +113,28 @@ char **json_handler_parse_addr_array(const char *json_str) {
 }
 
 
-json_object *json_handler_all_stats(t_pvd_stats *stats) {
+json_object *json_handler_all_stats(t_pvd_stats **stats, const int stats_size) {
 	json_object *json = json_object_new_object();
-	json_object_object_add(json, "rtt", json_handler_rtt_stats(stats));
-	return json;
+	for (int i = 0; i < stats_size; ++i) {
+		json_object_object_add(json, stats[i]->info.name, json_handler_all_stats_one_pvd(stats[i]));
+	}
+	return json_object_get(json);
 }
 
 
-json_object *json_handler_rtt_stats(t_pvd_stats *stats) {
-	// ==== create json ====
+json_object *json_handler_all_stats_one_pvd(t_pvd_stats *stats) {
+	json_object *json = json_object_new_object();
+	json_object_object_add(json, "rtt", json_handler_rtt_stats_one_pvd(stats));
+	json_object_object_add(json, "tput", json_handler_tput_stats_one_pvd(stats));
+	return json_object_get(json);
+}
+
+
+json_object *json_handler_rtt_stats_one_pvd(t_pvd_stats *stats) {
 	json_object *json = json_object_new_object();
 	json_object *jstat = NULL;
+
+	// create a json object for general, upload and download rtt and add them together
 	for (int i = 0; i < 3; ++i) {
 		jstat = json_object_new_object();
 		json_object_object_add(jstat, "min", json_object_new_double(stats->rtt[i].min));
@@ -135,10 +146,25 @@ json_object *json_handler_rtt_stats(t_pvd_stats *stats) {
 			json_object_object_add(json, (i == 1) ? "upload" : "download", jstat);
 	}
 
-	return json;
+	return json_object_get(json);
 }
 
 
-json_object *json_handler_tput_stats() {
-	return NULL;
+json_object *json_handler_tput_stats_one_pvd(t_pvd_stats *stats) {
+	json_object *json = json_object_new_object();
+	json_object *jstat = NULL;
+
+	// create a json object for general, upload and download tput and add them together
+	for (int i = 0; i < 3; ++i) {
+		jstat = json_object_new_object();
+		json_object_object_add(jstat, "min", json_object_new_double(stats->tput[i].min));
+		json_object_object_add(jstat, "max", json_object_new_double(stats->tput[i].max));
+		json_object_object_add(jstat, "avg", json_object_new_double(stats->tput[i].avg));
+		if (i == 0)
+			json_object_object_add(json, "general", jstat);
+		else
+			json_object_object_add(json, (i == 1) ? "upload" : "download", jstat);
+	}
+
+	return json_object_get(json);
 }
