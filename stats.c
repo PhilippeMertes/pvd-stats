@@ -26,16 +26,9 @@ void free_stats(t_pvd_stats **stats, int size) {
 		for (int j = 0; info->addr[j] != NULL; ++j) {
 			free(info->addr[j]);
 		}
-		//free(info);
+
 		pcap_close(stats[i]->pcap);
-		/*
-		free(stats[i]->tput);
-		free(stats[i]->tput_up);
-		free(stats[i]->tput_dwn);
-		free(stats[i]->rtt);
-		free(stats[i]->rtt_up);
-		free(stats[i]->rtt_dwn);
-		*/
+		
 		t_pvd_flow *flow = stats[i]->flow;
 		t_pvd_flow *next_flow;
 		while(flow != NULL) {

@@ -28,12 +28,8 @@ typedef struct pvd_stats {
 	pcap_t *pcap;
 	unsigned long rcvd_cnt;
 	unsigned long snt_cnt;
-	t_pvd_max_min_avg tput;
-	t_pvd_max_min_avg tput_up;
-	t_pvd_max_min_avg tput_dwn;
-	t_pvd_max_min_avg rtt;
-	t_pvd_max_min_avg rtt_up;
-	t_pvd_max_min_avg rtt_dwn;
+	t_pvd_max_min_avg tput[3]; // [0] = general, [1] = upload, [2] = download
+	t_pvd_max_min_avg rtt[3]; // [0] = general, [1] = upload, [2] = download
 	t_pvd_flow *flow;
 } t_pvd_stats;
 

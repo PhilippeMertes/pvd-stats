@@ -187,15 +187,15 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 
 		if (flow) {
 			//printf("Flow found. Calculating throughput and RTT\n");
-			update_throughput_rtt(&stats->tput, &stats->rtt, flow, pkthdr->ts);
+			update_throughput_rtt(&stats->tput[0], &stats->rtt[0], flow, pkthdr->ts);
 			// if we received the packet, then it is an ACK to an uploaded packet
 			if (rcvd) {
 				printf("UPLOAD\n");
-				update_throughput_rtt(&stats->tput_up, &stats->rtt_up, flow, pkthdr->ts);
+				update_throughput_rtt(&stats->tput[1], &stats->rtt[1], flow, pkthdr->ts);
 			}
 			else {
 				printf("DOWNLOAD\n");
-				update_throughput_rtt(&stats->tput_dwn, &stats->rtt_dwn, flow, pkthdr->ts);
+				update_throughput_rtt(&stats->tput[2], &stats->rtt[2], flow, pkthdr->ts);
 			}
 			remove_flow(stats, flow);
 		}
@@ -335,30 +335,16 @@ int init_stats(int size) {
 		}
 		stats[i]->flow = NULL;
 		stats[i]->pcap = NULL;
-		stats[i]->tput.avg = 0;
-		stats[i]->tput.min = 0;
-		stats[i]->tput.max = 0;
-		stats[i]->tput.nb = 0;
-		stats[i]->tput_up.avg = 0;
-		stats[i]->tput_up.min = 0;
-		stats[i]->tput_up.max = 0;
-		stats[i]->tput_up.nb = 0;
-		stats[i]->tput_dwn.avg = 0;
-		stats[i]->tput_dwn.min = 0;
-		stats[i]->tput_dwn.max = 0;
-		stats[i]->tput_dwn.nb = 0;
-		stats[i]->rtt.avg = 0;
-		stats[i]->rtt.min = 0;
-		stats[i]->rtt.max = 0;
-		stats[i]->rtt.nb = 0;
-		stats[i]->rtt_up.avg = 0;
-		stats[i]->rtt_up.min = 0;
-		stats[i]->rtt_up.max = 0;
-		stats[i]->rtt_up.nb = 0;
-		stats[i]->rtt_dwn.avg = 0;
-		stats[i]->rtt_dwn.min = 0;
-		stats[i]->rtt_dwn.max = 0;
-		stats[i]->rtt_dwn.nb = 0;
+		for (int j = 0; j < 3; ++j) {
+			stats[i]->tput[j].avg = 0;
+			stats[i]->tput[j].min = 0;
+			stats[i]->tput[j].max = 0;
+			stats[i]->tput[j].nb = 0;
+			stats[i]->rtt[j].avg = 0;
+			stats[i]->rtt[j].min = 0;
+			stats[i]->rtt[j].max = 0;
+			stats[i]->rtt[j].nb = 0;
+		}
 		stats[i]->rcvd_cnt = 0;
 		stats[i]->snt_cnt = 0;
 	}

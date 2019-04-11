@@ -132,27 +132,17 @@ char *json_handler_rtt(t_pvd_stats **pvd_stats, const char *pvdname, int stats_s
 
 	// ==== create json ====
 	json_object *json = json_object_new_object();
-
-	// download
-	json_object *jstat = json_object_new_object();
-	json_object_object_add(jstat, "min", json_object_new_double(stats->rtt_dwn.min));
-	json_object_object_add(jstat, "max", json_object_new_double(stats->rtt_dwn.max));
-	json_object_object_add(jstat, "avg", json_object_new_double(stats->rtt_dwn.avg));
-	json_object_object_add(json, "download", jstat);
-
-	// upload
-	jstat = json_object_new_object();
-	json_object_object_add(jstat, "min", json_object_new_double(stats->rtt_up.min));
-	json_object_object_add(jstat, "max", json_object_new_double(stats->rtt_up.max));
-	json_object_object_add(jstat, "avg", json_object_new_double(stats->rtt_up.avg));
-	json_object_object_add(json, "upload", jstat);
-
-	// general stats
-	jstat = json_object_new_object();
-	json_object_object_add(jstat, "min", json_object_new_double(stats->rtt.min));
-	json_object_object_add(jstat, "max", json_object_new_double(stats->rtt.max));
-	json_object_object_add(jstat, "avg", json_object_new_double(stats->rtt.avg));
-	json_object_object_add(json, "general", jstat);
+	json_object *jstat = NULL;
+	for (int i = 0; i < 3; ++i) {
+		jstat = json_object_new_object();
+		json_object_object_add(jstat, "min", json_object_new_double(stats->rtt[i].min));
+		json_object_object_add(jstat, "max", json_object_new_double(stats->rtt[i].max));
+		json_object_object_add(jstat, "avg", json_object_new_double(stats->rtt[i].avg));
+		if (i == 0)
+			json_object_object_add(json, "general", jstat);
+		else
+			json_object_object_add(json, (i == 1) ? "upload" : "download", jstat);
+	}
 
 	// create the string to return
 	json_str = strdup(json_object_to_json_string(json));
