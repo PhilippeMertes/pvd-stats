@@ -113,23 +113,14 @@ char **json_handler_parse_addr_array(const char *json_str) {
 }
 
 
-char *json_handler_all_stats() {
+json_object *json_handler_all_stats(t_pvd_stats *stats) {
 	json_object *json = json_object_new_object();
-	return NULL;
+	json_object_object_add(json, "rtt", json_handler_rtt_stats(stats));
+	return json;
 }
 
-char *json_handler_rtt(t_pvd_stats **pvd_stats, const char *pvdname, int stats_size) {
-	// ==== find stats corresponding to specified PvD =====
-	t_pvd_stats *stats = NULL;
-	char *json_str = NULL;
-	for (int i = 0; i < stats_size; ++i) {
-		if (strcmp(pvd_stats[i]->info.name, pvdname) == 0)
-			stats = pvd_stats[i];
-	}
-	if (stats == NULL)
-		return "No statistics found for the given PvD";
 
-
+json_object *json_handler_rtt_stats(t_pvd_stats *stats) {
 	// ==== create json ====
 	json_object *json = json_object_new_object();
 	json_object *jstat = NULL;
@@ -144,13 +135,10 @@ char *json_handler_rtt(t_pvd_stats **pvd_stats, const char *pvdname, int stats_s
 			json_object_object_add(json, (i == 1) ? "upload" : "download", jstat);
 	}
 
-	// create the string to return
-	json_str = strdup(json_object_to_json_string(json));
-	json_object_put(jstat);
-	json_object_put(json);
-	return json_str;
+	return json;
 }
 
-char *json_handler_tput() {
+
+json_object *json_handler_tput_stats() {
 	return NULL;
 }

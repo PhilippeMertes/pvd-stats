@@ -190,11 +190,11 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 			update_throughput_rtt(&stats->tput[0], &stats->rtt[0], flow, pkthdr->ts);
 			// if we received the packet, then it is an ACK to an uploaded packet
 			if (rcvd) {
-				printf("UPLOAD\n");
+				//printf("UPLOAD\n");
 				update_throughput_rtt(&stats->tput[1], &stats->rtt[1], flow, pkthdr->ts);
 			}
 			else {
-				printf("DOWNLOAD\n");
+				//printf("DOWNLOAD\n");
 				update_throughput_rtt(&stats->tput[2], &stats->rtt[2], flow, pkthdr->ts);
 			}
 			remove_flow(stats, flow);
@@ -261,13 +261,24 @@ static int create_local_socket() {
 }
 
 
+t_pvd_stats *find_stats(t_pvd_stats **pvd_stats, const char *pvdname, const int stats_size) {
+	// ==== find stats corresponding to specified PvD =====
+	t_pvd_stats *stats = NULL;
+	for (int i = 0; i < stats_size; ++i) {
+		if (strcmp(pvd_stats[i]->info.name, pvdname) == 0)
+			stats = pvd_stats[i];
+	}
+	return stats;
+}
+
+
 static void handle_socket_connection(int welcome_sock) {
 	int sock;
 	struct sockaddr_in addr;
 	socklen_t addr_len;
 	char *buffer = malloc(SOCKET_BUFSIZE);
 	ssize_t size;
-	char *json = NULL;
+	json_object *json = NULL;
 
 	addr_len = sizeof(struct sockaddr_in);
 
@@ -288,21 +299,24 @@ static void handle_socket_connection(int welcome_sock) {
 
 	pthread_mutex_lock(&mutex_stats);
 	if (strcmp(buffer, "all") == 0) {		
-		json = json_handler_all_stats();
+		json = json_handler_all_stats(stats[0]);
 	}
 	else if (strcmp(buffer, "rtt") == 0) {
-		json = json_handler_rtt(stats, "video.mpvd.io.", 1);
+		json = json_handler_rtt_stats(stats[0]);
 	}
 	else if (strcmp(buffer, "tput") == 0) {
-		json = json_handler_tput();
+		json = json_handler_tput_stats();
 	}
 	pthread_mutex_unlock(&mutex_stats);
 
 	if (json != NULL) {
-		printf("%s\n", json);
+		char *json_str = json_object_to_json_string(json);
+		printf("%s\n", json_str);
+		free(json_str);
 	}
 
-	free(json);
+	json_object_put(json);
+	free(buffer);
 	
 	close(sock);
 }
