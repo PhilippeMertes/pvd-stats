@@ -113,12 +113,26 @@ char **json_handler_parse_addr_array(const char *json_str) {
 }
 
 
-json_object *json_handler_all_stats(t_pvd_stats **stats, const int stats_size) {
+static json_object *create_json_for_all_pvds(t_pvd_stats **stats, const int stats_size, json_object* (*stats_of_pvd)(t_pvd_stats*)) {
 	json_object *json = json_object_new_object();
-	for (int i = 0; i < stats_size; ++i) {
-		json_object_object_add(json, stats[i]->info.name, json_handler_all_stats_one_pvd(stats[i]));
-	}
+	for (int i = 0; i < stats_size; ++i)
+		json_object_object_add(json, stats[i]->info.name, (*stats_of_pvd) (stats[i]));
 	return json;
+}
+
+
+json_object *json_handler_all_stats(t_pvd_stats **stats, const int stats_size) {
+	return create_json_for_all_pvds(stats, stats_size, json_handler_all_stats_one_pvd);
+}
+
+
+json_object *json_handler_rtt_stats(t_pvd_stats **stats, const int stats_size) {
+	return create_json_for_all_pvds(stats, stats_size, json_handler_rtt_stats_one_pvd);
+}
+
+
+json_object *json_handler_tput_stats(t_pvd_stats **stats, const int stats_size) {
+	return create_json_for_all_pvds(stats, stats_size, json_handler_tput_stats_one_pvd);
 }
 
 

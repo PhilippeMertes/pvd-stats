@@ -262,17 +262,6 @@ static int create_local_socket() {
 }
 
 
-t_pvd_stats *find_stats(t_pvd_stats **pvd_stats, const char *pvdname, const int stats_size) {
-	// ==== find stats corresponding to specified PvD =====
-	t_pvd_stats *stats = NULL;
-	for (int i = 0; i < stats_size; ++i) {
-		if (strcmp(pvd_stats[i]->info.name, pvdname) == 0)
-			stats = pvd_stats[i];
-	}
-	return stats;
-}
-
-
 static void handle_socket_connection(int welcome_sock) {
 	int sock;
 	struct sockaddr_in addr;
@@ -280,6 +269,9 @@ static void handle_socket_connection(int welcome_sock) {
 	char *buffer = malloc(SOCKET_BUFSIZE);
 	ssize_t size;
 	json_object *json = NULL;
+	char delim[] = " ";
+	char *cmd;
+	char *pvd;
 
 	addr_len = sizeof(struct sockaddr_in);
 
@@ -298,31 +290,47 @@ static void handle_socket_connection(int welcome_sock) {
 	fprintf(stdout, "Message received: %s\n", buffer);
 	fflush(stdout);
 
+	cmd = strtok(buffer, delim);
+	pvd = strtok(NULL, delim);
+
+	printf("cmd: %s\n", cmd);
+	printf("pvd: %s\n", pvd);
+
+	t_pvd_stats *pvd_stats = NULL;
 	pthread_mutex_lock(&mutex_stats);
-	if (strcmp(buffer, "all") == 0) {		
-		json = json_handler_all_stats(stats, stats_size);
+	if (pvd) {
+		// find stats corresponding to the pvd
+		for (int i = 0; i < stats_size; ++i)
+			if (strcmp(stats[i]->info.name, pvd) == 0)
+				pvd_stats = stats[i];
+		if (!pvd_stats) {
+			// TODO: reply that there is no corresponding PvD name
+			return;
+		}
 	}
-	else if (strcmp(buffer, "rtt") == 0) {
-		json = json_handler_rtt_stats_one_pvd(stats[0]);
+
+	if (strcmp(cmd, "all") == 0) {
+		json = (pvd) ? json_handler_all_stats_one_pvd(pvd_stats) : json_handler_all_stats(stats, stats_size);
 	}
-	else if (strcmp(buffer, "tput") == 0) {
-		json = json_handler_tput_stats_one_pvd(stats[0]);
+	else if (strcmp(cmd, "rtt") == 0) {
+		json = (pvd) ? json_handler_rtt_stats_one_pvd(pvd_stats) : json_handler_rtt_stats(stats, stats_size);
 	}
+	else if (strcmp(cmd, "tput") == 0) {
+		json = (pvd) ? json_handler_tput_stats_one_pvd(pvd_stats) : json_handler_tput_stats(stats, stats_size);
+	}
+	pthread_mutex_unlock(&mutex_stats);
 
 	if (json != NULL) {
 		char *json_str = json_object_to_json_string_ext(json, JSON_C_TO_STRING_SPACED | JSON_C_TO_STRING_PRETTY);
 		printf("%s\n", json_str);
 	}
-
 	json_object_put(json);
-	free(buffer);
-	pthread_mutex_unlock(&mutex_stats);
-	
+	free(buffer);	
 	close(sock);
 }
 
 
-void *socket_communication() {
+static void *socket_communication() {
 	int welcome_sock = create_local_socket();
 	if (welcome_sock < 0) {
 		perror("Unable to create local welcome socket\n");
@@ -338,7 +346,7 @@ void *socket_communication() {
 }
 
 
-int init_stats(int size) {
+static int init_stats(int size) {
 	stats = malloc(size * sizeof(t_pvd_stats*));
 	for (int i = 0; i < size; ++i) {
 		stats[i] = malloc(sizeof(t_pvd_stats));

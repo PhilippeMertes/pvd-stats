@@ -17,7 +17,8 @@ int main(int argc, char ** argv) {
 	char msg[256];
 
 	printf("Message to send: ");
-	scanf("%s", msg);
+	gets(msg);
+	printf("msg: %s\n", msg);
 
 	if ((create_socket = socket(PF_LOCAL, SOCK_STREAM, 0)) > 0)
 		printf("Socket successfully created\n");
