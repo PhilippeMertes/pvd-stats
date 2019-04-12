@@ -14,10 +14,11 @@ int main(int argc, char ** argv) {
 	int create_socket;
 
 	struct sockaddr_un addr;
-	char msg[256];
+	char msg[2048];
+	ssize_t size;
 
 	printf("Message to send: ");
-	gets(msg);
+	fgets(msg, 256, stdin);
 	printf("msg: %s\n", msg);
 
 	if ((create_socket = socket(PF_LOCAL, SOCK_STREAM, 0)) > 0)
@@ -33,6 +34,9 @@ int main(int argc, char ** argv) {
 	else {
 		fprintf(stderr, "Connection error: %s\n", strerror(errno));
 	}
+
+	size = recv(create_socket, msg, 2048, 0);
+	printf("Answer: %s\n", msg);
 
 	return EXIT_SUCCESS;
 }

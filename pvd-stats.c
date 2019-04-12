@@ -269,7 +269,7 @@ static void handle_socket_connection(int welcome_sock) {
 	char *buffer = malloc(SOCKET_BUFSIZE);
 	ssize_t size;
 	json_object *json = NULL;
-	char delim[] = " ";
+	char delim[] = " \n";
 	char *cmd;
 	char *pvd;
 
@@ -293,18 +293,21 @@ static void handle_socket_connection(int welcome_sock) {
 	cmd = strtok(buffer, delim);
 	pvd = strtok(NULL, delim);
 
-	printf("cmd: %s\n", cmd);
-	printf("pvd: %s\n", pvd);
-
 	t_pvd_stats *pvd_stats = NULL;
 	pthread_mutex_lock(&mutex_stats);
 	if (pvd) {
 		// find stats corresponding to the pvd
-		for (int i = 0; i < stats_size; ++i)
+		for (int i = 0; i < stats_size; ++i) {
 			if (strcmp(stats[i]->info.name, pvd) == 0)
 				pvd_stats = stats[i];
+		}
 		if (!pvd_stats) {
-			// TODO: reply that there is no corresponding PvD name
+			// the given pvd is not known
+			pthread_mutex_unlock(&mutex_stats);
+			sprintf(buffer, "{\"error\": \"unknown pvd\"}");
+			send(sock, buffer, strlen(buffer), 0);
+			free(buffer);
+			close(sock);
 			return;
 		}
 	}
@@ -322,7 +325,11 @@ static void handle_socket_connection(int welcome_sock) {
 
 	if (json != NULL) {
 		char *json_str = json_object_to_json_string_ext(json, JSON_C_TO_STRING_SPACED | JSON_C_TO_STRING_PRETTY);
-		printf("%s\n", json_str);
+		send(sock, json_str, strlen(json_str), 0);
+	}
+	else {
+		sprintf(buffer, "{\"error\": \"unknown command\nYou can only retrieve stats for [all] [rtt] [tput]\"}");
+		send(sock, buffer, strlen(buffer), 0);
 	}
 	json_object_put(json);
 	free(buffer);	
