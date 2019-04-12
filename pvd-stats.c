@@ -308,16 +308,15 @@ static void handle_socket_connection(int welcome_sock) {
 	else if (strcmp(buffer, "tput") == 0) {
 		json = json_handler_tput_stats_one_pvd(stats[0]);
 	}
-	pthread_mutex_unlock(&mutex_stats);
 
 	if (json != NULL) {
 		char *json_str = json_object_to_json_string_ext(json, JSON_C_TO_STRING_SPACED | JSON_C_TO_STRING_PRETTY);
 		printf("%s\n", json_str);
-		free(json_str);
 	}
 
-	while(!json_object_put(json));
+	json_object_put(json);
 	free(buffer);
+	pthread_mutex_unlock(&mutex_stats);
 	
 	close(sock);
 }

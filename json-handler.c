@@ -118,7 +118,7 @@ json_object *json_handler_all_stats(t_pvd_stats **stats, const int stats_size) {
 	for (int i = 0; i < stats_size; ++i) {
 		json_object_object_add(json, stats[i]->info.name, json_handler_all_stats_one_pvd(stats[i]));
 	}
-	return json_object_get(json);
+	return json;
 }
 
 
@@ -126,7 +126,7 @@ json_object *json_handler_all_stats_one_pvd(t_pvd_stats *stats) {
 	json_object *json = json_object_new_object();
 	json_object_object_add(json, "rtt", json_handler_rtt_stats_one_pvd(stats));
 	json_object_object_add(json, "tput", json_handler_tput_stats_one_pvd(stats));
-	return json_object_get(json);
+	return json;
 }
 
 
@@ -146,7 +146,7 @@ json_object *json_handler_rtt_stats_one_pvd(t_pvd_stats *stats) {
 			json_object_object_add(json, (i == 1) ? "upload" : "download", jstat);
 	}
 
-	return json_object_get(json);
+	return json;
 }
 
 
@@ -166,5 +166,5 @@ json_object *json_handler_tput_stats_one_pvd(t_pvd_stats *stats) {
 			json_object_object_add(json, (i == 1) ? "upload" : "download", jstat);
 	}
 
-	return json_object_get(json);
+	return json;
 }
