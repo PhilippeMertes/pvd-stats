@@ -24,9 +24,9 @@
 #define SOCKET_FILE "/tmp/pvd-stats.uds"
 #define SOCKET_BUFSIZE 1024
 
-pthread_mutex_t mutex_stats = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t mutex_print = PTHREAD_MUTEX_INITIALIZER;
 static t_pvd_stats **stats;
-static int stats_size = 0;
+static unsigned int stats_size = 0;
 
 /*
 t_pvd_list *get_pvd_list() {
@@ -181,26 +181,37 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 			return;
 
 		// find the flow to which we ack
-		pthread_mutex_lock(&mutex_stats);
 		t_pvd_flow *flow = find_flow(stats->flow, ip->ip6_dst.s6_addr, ip->ip6_src.s6_addr,
 			ntohs(tcp->dest), ntohs(tcp->source), ntohl(tcp->ack_seq));
 		//print_flow(stats->flow);
 
 		if (flow) {
+			pthread_mutex_lock(&stats->mutex);
 			//printf("Flow found. Calculating throughput and RTT\n");
-			update_throughput_rtt(&stats->tput[0], &stats->rtt[0], flow, pkthdr->ts);
+			update_rtt(&stats->rtt[0], flow, pkthdr->ts);
 			// if we received the packet, then it is an ACK to an uploaded packet
 			if (rcvd) {
 				//printf("UPLOAD\n");
-				update_throughput_rtt(&stats->tput[1], &stats->rtt[1], flow, pkthdr->ts);
+				update_rtt(&stats->rtt[1], flow, pkthdr->ts);
 			}
 			else {
 				//printf("DOWNLOAD\n");
-				update_throughput_rtt(&stats->tput[2], &stats->rtt[2], flow, pkthdr->ts);
+				update_rtt(&stats->rtt[2], flow, pkthdr->ts);
 			}
+			pthread_mutex_unlock(&stats->mutex);
+			
+
+			pthread_mutex_lock(&stats->mutex_acked);
+			// count acked bytes
+			u_int32_t acked = (flow->exp_ack >= flow->seq) ? flow->exp_ack - flow->seq : 4294967295 - flow->seq + flow->exp_ack + 1;
+			stats->acked_bytes[0] += acked;
+			if (rcvd)
+				stats->acked_bytes[1] += acked;
+			else
+				stats->acked_bytes[2] += acked;
+			pthread_mutex_unlock(&stats->mutex_acked);
 			remove_flow(stats, flow);
 		}
-		pthread_mutex_unlock(&mutex_stats);
 
 		// calculate expected ACK
 		u_int32_t seq = ntohl(tcp->seq);
@@ -210,9 +221,7 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 		// If the packet contains no payload, it doesn't need to be acked by the other side.
 		// Thus, we don't need to keep track of it.
 		if (seq != ack) {
-			pthread_mutex_lock(&mutex_stats);
 			add_flow(stats, ip->ip6_src.s6_addr, ip->ip6_dst.s6_addr, ntohs(tcp->source), ntohs(tcp->dest), seq, ack, pkthdr->ts);
-			pthread_mutex_unlock(&mutex_stats);
 		}
 	}
 	//printf("\n");
@@ -225,7 +234,10 @@ char *construct_filter(char **addr) {
 	for (int i = 1; addr[i] != NULL; ++i)
 		filt_len += snprintf(NULL, 0, " or %s", addr[i]);
 	if (filt_len < 0) {
+		pthread_mutex_lock(&mutex_print);
 		fprintf(stderr, "Error while constructing packet filter\n");
+		fflush(stderr);
+		pthread_mutex_unlock(&mutex_print);
 		return NULL;
 	}
 	// create filter
@@ -276,13 +288,19 @@ static void handle_socket_connection(int welcome_sock) {
 	addr_len = sizeof(struct sockaddr_in);
 
 	if ((sock = accept(welcome_sock, (struct sockaddr *) &addr, &addr_len)) <= 0) {
+		pthread_mutex_lock(&mutex_print);
 		fprintf(stderr, "Error while accepting client connection: %s\n", strerror(errno));
+		fflush(stderr);
+		pthread_mutex_unlock(&mutex_print);
 		return;
 	}
 
 	size = recv(sock, buffer, SOCKET_BUFSIZE-1, 0);
 	if (size < 0) {
+		pthread_mutex_lock(&mutex_print);
 		fprintf(stderr, "Error while reading message sent to the socket: %s\n", strerror(errno));
+		fflush(stderr);
+		pthread_mutex_unlock(&mutex_print);
 		return;
 	}
 
@@ -294,7 +312,7 @@ static void handle_socket_connection(int welcome_sock) {
 	pvd = strtok(NULL, delim);
 
 	t_pvd_stats *pvd_stats = NULL;
-	pthread_mutex_lock(&mutex_stats);
+
 	if (pvd) {
 		// find stats corresponding to the pvd
 		for (int i = 0; i < stats_size; ++i) {
@@ -303,13 +321,21 @@ static void handle_socket_connection(int welcome_sock) {
 		}
 		if (!pvd_stats) {
 			// the given pvd is not known
-			pthread_mutex_unlock(&mutex_stats);
 			sprintf(buffer, "{\"error\": \"unknown pvd\"}");
-			send(sock, buffer, strlen(buffer), 0);
+			send(sock, buffer, strlen(buffer)+1, 0);
 			free(buffer);
 			close(sock);
 			return;
 		}
+	}
+	
+	// If no PvD is specified, stats for all the PvDs should be retrieved and, thus, we need to lock all of them
+	if (!pvd) {
+		for (int i = 0; i < stats_size; ++i)
+			pthread_mutex_lock(&stats[i]->mutex);
+	} else {
+		// only lock mutex for this specific PvD
+		pthread_mutex_lock(&pvd_stats->mutex);
 	}
 
 	if (strcmp(cmd, "all") == 0) {
@@ -321,16 +347,25 @@ static void handle_socket_connection(int welcome_sock) {
 	else if (strcmp(cmd, "tput") == 0) {
 		json = (pvd) ? json_handler_tput_stats_one_pvd(pvd_stats) : json_handler_tput_stats(stats, stats_size);
 	}
-	pthread_mutex_unlock(&mutex_stats);
+
+	// unlocking mutex(es)
+	if (!pvd) {
+		for (int i = 0; i < stats_size; ++i)
+			pthread_mutex_unlock(&stats[i]->mutex);
+	} else {
+		pthread_mutex_unlock(&pvd_stats->mutex);
+	}
 
 	if (json != NULL) {
-		char *json_str = json_object_to_json_string_ext(json, JSON_C_TO_STRING_SPACED | JSON_C_TO_STRING_PRETTY);
-		send(sock, json_str, strlen(json_str), 0);
+		const char *json_str = json_object_to_json_string_ext(json, JSON_C_TO_STRING_SPACED | JSON_C_TO_STRING_PRETTY);
+		printf("%s\n", json_str);
+		send(sock, json_str, strlen(json_str)+1, 0);
 	}
 	else {
 		sprintf(buffer, "{\"error\": \"unknown command\nYou can only retrieve stats for [all] [rtt] [tput]\"}");
-		send(sock, buffer, strlen(buffer), 0);
+		send(sock, buffer, strlen(buffer)+1, 0);
 	}
+
 	json_object_put(json);
 	free(buffer);	
 	close(sock);
@@ -358,14 +393,16 @@ static int init_stats(int size) {
 	for (int i = 0; i < size; ++i) {
 		stats[i] = malloc(sizeof(t_pvd_stats));
 		if (stats[i] == NULL) {
+			pthread_mutex_lock(&mutex_print);
 			fprintf(stderr, "Unable to allocate memory for the structure containing the PvD stats\n");
+			fflush(stderr);
+			pthread_mutex_unlock(&mutex_print);
 			free_stats(stats, i);
 			return EXIT_FAILURE;
 		}
 		stats[i]->info.name = NULL;
 		stats[i]->info.addr = NULL;
 		stats[i]->flow = NULL;
-		stats[i]->pcap = NULL;
 		for (int j = 0; j < 3; ++j) {
 			stats[i]->tput[j].avg = 0;
 			stats[i]->tput[j].min = 0;
@@ -375,16 +412,111 @@ static int init_stats(int size) {
 			stats[i]->rtt[j].min = 0;
 			stats[i]->rtt[j].max = 0;
 			stats[i]->rtt[j].nb = 0;
+			stats[i]->acked_bytes[j] = 0;
 		}
 		stats[i]->rcvd_cnt = 0;
 		stats[i]->snt_cnt = 0;
+		pthread_mutex_init(&stats[i]->mutex, NULL);
+		pthread_mutex_init(&stats[i]->mutex_acked, NULL);
 	}
 	return EXIT_SUCCESS;
 }
 
 
+static void *calculate_tput(void *args) {
+	double curr_tput[3];
+	t_pvd_max_min_avg *tput = NULL;
+
+	while(1) {
+		sleep(1);
+		for (int i = 0; i < stats_size; ++i) {
+			pthread_mutex_lock(&stats[i]->mutex_acked);
+			// get number of acked bytes during last second (= current tput)
+			for (int j = 0; j < 3; ++j) {
+				curr_tput[j] = (double) stats[i]->acked_bytes[j] * 8;
+				stats[i]->acked_bytes[j] = 0;
+			}
+			pthread_mutex_unlock(&stats[i]->mutex_acked);
+
+			if (curr_tput[0] == 0)
+				continue; // we ignore the times, when there is no packet transmission at all
+			
+			pthread_mutex_lock(&stats[i]->mutex);
+			// update statistics values
+			for (int j = 0; j < 3; ++j) {
+				if (curr_tput[j] == 0)
+					continue;
+				tput = &stats[i]->tput[j];
+				tput->min = (curr_tput[j] < tput->min || tput->min == 0) ? curr_tput[j] : tput->min;
+				tput->max = (curr_tput[j] > tput->max) ? curr_tput[j] : tput->max;
+				tput->avg = ((double)(tput->nb) * tput->avg + curr_tput[j]) / (double) (tput->nb+1);
+				++tput->nb;
+			}
+			tput = NULL;
+			pthread_mutex_unlock(&stats[i]->mutex);
+		}
+	}
+	pthread_exit(NULL);
+}
+
+
+static void *sniff_packets(void *args) {
+	t_pvd_stats *stats = (t_pvd_stats*) args;
+	// As we're capturing on all the interfaces, the data link type will be LINKTYPE_LINUX_SLL.
+	char *filter;
+	struct bpf_program fp;
+	char errbuf[PCAP_ERRBUF_SIZE];
+	pcap_t *pcap = pcap_open_live(NULL, BUFSIZ, 0, 0, errbuf);
+	if (pcap == NULL) {
+		pthread_mutex_lock(&mutex_print);
+		fprintf(stderr, "pcap_open_live(): %s\n", errbuf);
+		fflush(stderr);
+		pthread_mutex_unlock(&mutex_print);
+		pthread_exit(NULL);
+	}
+
+	if (stats->info.addr[0] == NULL) {
+		pthread_mutex_lock(&mutex_print);
+		fprintf(stderr, "There is no IPv6 address associated to the pvd %s\n"
+			"Thus, no packets will be captured for this PvD.\n", stats->info.name);
+		fflush(stderr);
+		pthread_mutex_unlock(&mutex_print);
+		pcap_close(pcap);
+		pthread_exit(NULL);
+	}
+
+	// construct packet filter
+	filter = construct_filter(stats->info.addr);
+	printf("Packet filter: %s\n", filter);
+
+	// compile our filter
+	if (pcap_compile(pcap, &fp, filter, 0, PCAP_NETMASK_UNKNOWN)) {
+		pthread_mutex_lock(&mutex_print);
+		fprintf(stderr, "Error while compiling the packet filter for the PvD %s\n", stats->info.name);
+		fflush(stderr);
+		pthread_mutex_unlock(&mutex_print);
+		pthread_exit(NULL);
+	}
+
+	// set the filter
+	if (pcap_setfilter(pcap, &fp)) {
+		pthread_mutex_lock(&mutex_print);
+		fprintf(stderr, "Error while setting the packet filter for the PvD %s\n", stats->info.name);
+		fflush(stderr);
+		pthread_mutex_unlock(&mutex_print);
+		pthread_exit(NULL);
+	}
+
+	free(filter);
+	pcap_loop(pcap, -1, pcap_callback, (u_char*) stats);
+	pcap_close(pcap);
+	pthread_exit(NULL);
+}
+
+
 int main(int argc, char **argv) {
-	pthread_t thread;
+	pthread_t socket_thread;
+	pthread_t tput_thread;
 	pthread_attr_t thread_attr;
 
 	// ==== collect PvD information ====
@@ -410,67 +542,63 @@ int main(int argc, char **argv) {
 	}
 	free(pvd_list);
 	*/
-
-	// ==== Packet capturing ====
-	char errbuf[PCAP_ERRBUF_SIZE];
-	struct bpf_program fp;
-	char *filter;
-
 	// to be removed afterwards
-	stats_size = 1;
+	stats_size = 2;
+	// ==== Packet capturing ====
+	pthread_t stats_thread[stats_size];
 
 	if (init_stats(stats_size))
 		exit(0);
+	// to be removed after testing
 	stats[0]->info.name = strdup("video.mpvd.io.");
 	stats[0]->info.addr = calloc(2, sizeof(char *));
-	stats[0]->info.addr[0] = "2a02:a03f:4286:df00:cdf8:e989:b423:5443";
+	stats[0]->info.addr[0] = "fe80::cba3:7abd:be2e:9691";
+	stats[1]->info.name = strdup("test1.example.com.");
+	stats[1]->info.addr = calloc(3, sizeof(char *));
+	stats[1]->info.addr[0] = "2a02:2788:b4:222:d4b6:3191:8a44:51a6";
+	stats[1]->info.addr[1] = "2a02:2788:b4:222:cdf8:e989:b423:5443";
 
 	// Thread handling communication with other applications using local UNIX sockets	
-	//pthread_mutex_init(&mutex_stats, NULL);
 	pthread_attr_init(&thread_attr);
 	pthread_attr_setdetachstate(&thread_attr, PTHREAD_CREATE_DETACHED);
-	if (pthread_create(&thread, &thread_attr, socket_communication, NULL)) {
+	if (pthread_create(&socket_thread, &thread_attr, socket_communication, NULL)) {
 		fprintf(stderr, "Unable to create thread handling socket communication\n");
 		exit(EXIT_FAILURE);
 	}
 	pthread_attr_destroy(&thread_attr);
 
+	// Threads sniffing network packets
+	pthread_attr_init(&thread_attr);
+	pthread_attr_setdetachstate(&thread_attr, PTHREAD_CREATE_JOINABLE);
 	for (int i = 0; i < stats_size; ++i) {
-		// As we're capturing on all the interfaces, the data link type will be LINKTYPE_LINUX_SLL.
-		stats[i]->pcap = pcap_open_live(NULL, BUFSIZ, 0, 0, errbuf);
-		if (stats[i]->pcap == NULL) {
-			fprintf(stderr, "pcap_open_live(): %s\n", errbuf);
-			exit(2);
+		if (pthread_create(&stats_thread[i], &thread_attr, sniff_packets, (void*) stats[i])) {
+			pthread_mutex_lock(&mutex_print);
+			fprintf(stderr, "Unable to create thread sniffing packets for PvD %s\n", stats[i]->info.name);
+			fflush(stderr);
+			pthread_mutex_unlock(&mutex_print);
 		}
-
-		if (stats[i]->info.addr[0] == NULL) {
-			printf("There is no address associated to the pvd %s\n", stats[i]->info.name);
-			continue;
-		}
-
-		// construct packet filter
-		filter = construct_filter(stats[i]->info.addr);
-		printf("Packet filter: %s\n", filter);
-
-		// compile our filter
-		if (pcap_compile(stats[i]->pcap, &fp, filter, 0, PCAP_NETMASK_UNKNOWN)) {
-			perror("Error while compiling the packet filter\n");
-			exit(2);
-		}
-
-		// set the filter
-		if (pcap_setfilter(stats[i]->pcap, &fp)) {
-			perror("Error while setting the packet filter\n");
-			exit(2);
-		}
-
-		free(filter);
-		pcap_loop(stats[i]->pcap, -1, pcap_callback, (u_char*) stats[i]);
-		
 	}
+	pthread_attr_destroy(&thread_attr);
 
+	// Thread calculating throughput each second
+	pthread_attr_init(&thread_attr);
+	pthread_attr_setdetachstate(&thread_attr, PTHREAD_CREATE_DETACHED);
+	if (pthread_create(&tput_thread, &thread_attr, calculate_tput, NULL)) {
+		pthread_mutex_lock(&mutex_print);
+			fprintf(stderr, "Unable to create thread calculating throughput\n");
+			fflush(stderr);
+			pthread_mutex_unlock(&mutex_print);
+	}
+	pthread_attr_destroy(&thread_attr);
+
+	for (int i = 0; i < stats_size; ++i) {
+		if (pthread_join(stats_thread[i], NULL)) {
+			fprintf(stderr, "Error while joining packet sniffing threads\n");
+			fflush(stderr);
+			exit(EXIT_FAILURE);
+		}
+	}
 	free_stats(stats, stats_size);
-	pthread_mutex_destroy(&mutex_stats);
 	pthread_exit(NULL);
 
 	return EXIT_SUCCESS;
