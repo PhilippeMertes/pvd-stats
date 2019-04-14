@@ -37,8 +37,6 @@ typedef struct pvd_stats {
 
 void free_stats(t_pvd_stats **stats, int size);
 
-//int init_stats(t_pvd_stats *stats, int size);
-
 int add_flow(t_pvd_stats *stats, const u_int8_t src_ip[16], const u_int8_t dst_ip[16],
 	const u_int16_t src_port, const u_int16_t dst_port, const u_int32_t seq, const u_int32_t exp_ack, const struct timeval ts);
 

@@ -1,4 +1,4 @@
-//#include <libpvd.h>
+#include <libpvd.h>
 #include <pcap.h> 
 #include <stdio.h> 
 #include <stdlib.h> 
@@ -15,6 +15,8 @@
 #include <math.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include "json-handler.h"
 
@@ -28,20 +30,23 @@ static pthread_mutex_t mutex_print = PTHREAD_MUTEX_INITIALIZER;
 static t_pvd_stats **stats;
 static unsigned int stats_size = 0;
 
-/*
+
 t_pvd_list *get_pvd_list() {
 	t_pvd_connection *conn = pvd_connect(PVDD_PORT);
 	t_pvd_list *list = malloc(sizeof(t_pvd_list));
 
-	if(pvd_get_pvd_list_sync(conn, list))
+	if(pvd_get_pvd_list_sync(conn, list)) {
 		fprintf(stderr, "get_pvd_list: Error while retrieving PvDs list.\n"
 			"Make sure that pvdd is running on port %d\n", PVDD_PORT);
+		free(list);
+		return NULL;
+	}
 
 	pvd_disconnect(conn);
 	return list;
 }
-*/
-/*
+
+
 int get_pvd_attribute(t_pvd_list *list, char *pvdname, char *attr) {	
 	t_pvd_connection *conn = pvd_connect(PVDD_PORT);
 
@@ -70,9 +75,9 @@ int get_pvd_attribute(t_pvd_list *list, char *pvdname, char *attr) {
 
 	return EXIT_SUCCESS;
 }
-*/
 
-/*
+
+
 char **get_pvd_addresses(char *pvdname) {
 	t_pvd_connection *conn = pvd_connect(PVDD_PORT);
 
@@ -91,7 +96,7 @@ char **get_pvd_addresses(char *pvdname) {
 
 	return addr;
 }
-*/
+
 
 
 struct linux_sll {
@@ -252,6 +257,7 @@ char *construct_filter(char **addr) {
 static int create_local_socket() {
 	int s;
 	struct sockaddr_un addr;
+	mode_t curr_mask;
 
 	if ((s = socket(AF_LOCAL, SOCK_STREAM, 0)) == -1)
 		return -1;
@@ -260,10 +266,13 @@ static int create_local_socket() {
 
 	addr.sun_family = AF_LOCAL;
 	strcpy(addr.sun_path, SOCKET_FILE);
+
+	curr_mask = umask(011); // needed so that non-root users can connect to socket
 	if (bind(s, (struct sockaddr *) &addr, sizeof(addr))){
 		close(s);
 		return -1;
 	}
+	umask(curr_mask);
 
 	if (listen(s, 10)) {
 		close(s);
@@ -433,7 +442,7 @@ static void *calculate_tput(void *args) {
 			pthread_mutex_lock(&stats[i]->mutex_acked);
 			// get number of acked bytes during last second (= current tput)
 			for (int j = 0; j < 3; ++j) {
-				curr_tput[j] = (double) stats[i]->acked_bytes[j] * 8;
+				curr_tput[j] = (double) stats[i]->acked_bytes[j] * 8 / 1000000; //tput in Mbps
 				stats[i]->acked_bytes[j] = 0;
 			}
 			pthread_mutex_unlock(&stats[i]->mutex_acked);
@@ -520,36 +529,32 @@ int main(int argc, char **argv) {
 	pthread_attr_t thread_attr;
 
 	// ==== collect PvD information ====
-	/*
 	t_pvd_list *pvd_list = get_pvd_list();
-	int stats_size = pvd_list->npvd;
-	t_pvd_stats stats[stats_size];
+	if (pvd_list == NULL) {
+		return EXIT_FAILURE;
+	}
+	stats_size = pvd_list->npvd;
+
+	if (init_stats(stats_size))
+		exit(0);
 
 	// collect the PvD addresses
 	for (int i = 0; i < stats_size; ++i) {
-		stats[i].info = malloc(sizeof(t_pvd_info));
-		if (stats[i].info == NULL) {
-			fprintf(stderr, "Unable to allocate memory to store PvD information\n");
-			exit(EXIT_FAILURE);
-		}
-		stats[i].info->name = strdup(pvd_list->pvdnames[i]);
-		stats[i].info->addr = get_pvd_addresses(pvd_list->pvdnames[i]);
-		printf("IPv6 addresses corresponding to %s:\n", stats[i].info->name);
-		for (int j = 0; stats[i].info->addr[j] != NULL; ++j) {
-			printf("\t%s\n", stats[i].info->addr[j]);
+		stats[i]->info.name = strdup(pvd_list->pvdnames[i]);
+		stats[i]->info.addr = get_pvd_addresses(pvd_list->pvdnames[i]);
+		printf("IPv6 addresses corresponding to %s:\n", stats[i]->info.name);
+		for (int j = 0; stats[i]->info.addr[j] != NULL; ++j) {
+			printf("\t%s\n", stats[i]->info.addr[j]);
 		}
 		free(pvd_list->pvdnames[i]);
 	}
 	free(pvd_list);
-	*/
-	// to be removed afterwards
-	stats_size = 2;
-	// ==== Packet capturing ====
-	pthread_t stats_thread[stats_size];
 
+	/*
+	//to be removed after testing
+	stats_size = 2;
 	if (init_stats(stats_size))
 		exit(0);
-	// to be removed after testing
 	stats[0]->info.name = strdup("video.mpvd.io.");
 	stats[0]->info.addr = calloc(2, sizeof(char *));
 	stats[0]->info.addr[0] = "fe80::cba3:7abd:be2e:9691";
@@ -557,6 +562,10 @@ int main(int argc, char **argv) {
 	stats[1]->info.addr = calloc(3, sizeof(char *));
 	stats[1]->info.addr[0] = "2a02:2788:b4:222:d4b6:3191:8a44:51a6";
 	stats[1]->info.addr[1] = "2a02:2788:b4:222:cdf8:e989:b423:5443";
+	*/
+
+	// ==== Packet capturing ====
+	pthread_t stats_thread[stats_size];
 
 	// Thread handling communication with other applications using local UNIX sockets	
 	pthread_attr_init(&thread_attr);
