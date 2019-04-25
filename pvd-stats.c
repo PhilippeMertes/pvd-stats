@@ -294,6 +294,8 @@ static void handle_socket_connection(int welcome_sock) {
 	char *cmd;
 	char *pvd;
 
+	printf("stats[0] name:%s\n", stats[0]->info.name);
+
 	addr_len = sizeof(struct sockaddr_in);
 
 	if ((sock = accept(welcome_sock, (struct sockaddr *) &addr, &addr_len)) <= 0) {
@@ -310,6 +312,7 @@ static void handle_socket_connection(int welcome_sock) {
 		fprintf(stderr, "Error while reading message sent to the socket: %s\n", strerror(errno));
 		fflush(stderr);
 		pthread_mutex_unlock(&mutex_print);
+		close(sock);
 		return;
 	}
 
@@ -330,7 +333,7 @@ static void handle_socket_connection(int welcome_sock) {
 		}
 		if (!pvd_stats) {
 			// the given pvd is not known
-			sprintf(buffer, "{\"error\": \"unknown pvd\"}");
+			sprintf(buffer, "{\"error\": \"unknown cmd/pvd\"}");
 			send(sock, buffer, strlen(buffer)+1, 0);
 			free(buffer);
 			close(sock);
@@ -376,7 +379,7 @@ static void handle_socket_connection(int welcome_sock) {
 	}
 
 	json_object_put(json);
-	free(buffer);	
+	free(buffer);
 	close(sock);
 }
 
@@ -607,8 +610,9 @@ int main(int argc, char **argv) {
 			exit(EXIT_FAILURE);
 		}
 	}
+	
 	free_stats(stats, stats_size);
-	pthread_exit(NULL);
+	fprintf(stderr, "Unable to sniff packets for any PvD.\nStopping\n");
 
 	return EXIT_SUCCESS;
 }

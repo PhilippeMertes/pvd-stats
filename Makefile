@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -g -O2
-LIBS = -lpcap -ljson-c -lpthread
+LIBS = -lpcap -ljson-c -lpthread -lpvd
 
 .PHONY: all pvd-stats client-test
 
