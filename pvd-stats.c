@@ -1,3 +1,33 @@
+/*
+ * Copyright (c) 2019, Philippe Mertes <mertesph@hotmail.de>
+ * All rights reserved.
+ * 
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ * 
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ *    list of conditions and the following disclaimer.
+ * 
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ * 
+ * 3. Neither the name of the copyright holder nor the names of its
+ *    contributors may be used to endorse or promote products derived from
+ *    this software without specific prior written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 #include <libpvd.h>
 #include <pcap.h> 
 #include <stdio.h> 
@@ -153,14 +183,6 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 
 	// ==== network-layer header ====
 	struct ip6_hdr *ip = (struct ip6_hdr *) &packet[LEN_SLL];
-	/*
-	printf("src ip: ");
-	print_ip6_addr(ip->ip6_src.s6_addr);
-	printf("\n");
-	printf("dst ip: ");
-	print_ip6_addr(ip->ip6_dst.s6_addr);
-	printf("\n");
-	*/
 
 	// check if packet contains some transport-layer payload
 	if (ntohs(ip->ip6_plen) == 0)
@@ -169,17 +191,6 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 	// ==== TCP transport-layer ====
 	if (ip->ip6_nxt == IPPROTO_TCP) {
 		struct tcphdr *tcp = (struct tcphdr *) &packet[LEN_SLL+LEN_IPV6];
-		/*
-		printf("source port: %d\n", ntohs(tcp->source));
-		printf("dest port: %d\n", ntohs(tcp->dest));
-		printf("window: %d\n", ntohs(tcp->window));
-		printf("data offset: %d\n", tcp->doff);
-		printf("SEQ: %u\n", ntohl(tcp->seq));
-		printf("ACK_SEQ: %u\n", ntohl(tcp->ack_seq));
-		printf("SYN: %d\n", tcp->syn);
-		printf("ACK: %d\n", tcp->ack);
-		printf("FIN: %d\n", tcp->fin);
-		*/
 
 		// we don't take TCP handshake flows into account
 		if (tcp->syn)
@@ -232,7 +243,11 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 	//printf("\n");
 }
 
-
+/**
+ * Constructs a PCAP packet filter ORing the different addresses given as an input.
+ * @param addr C-string array containing IP addresses on which should be filtered
+ * @return Null-terminated C-string representing the PCAP filter
+**/
 char *construct_filter(char **addr) {
 	// detect filter length
 	int filt_len = snprintf(NULL, 0, "dst or src host %s", addr[0]);
@@ -293,8 +308,6 @@ static void handle_socket_connection(int welcome_sock) {
 	char delim[] = " \n";
 	char *cmd;
 	char *pvd;
-
-	printf("stats[0] name:%s\n", stats[0]->info.name);
 
 	addr_len = sizeof(struct sockaddr_in);
 
@@ -552,20 +565,21 @@ int main(int argc, char **argv) {
 		free(pvd_list->pvdnames[i]);
 	}
 	free(pvd_list);
-
-	/*
+	
 	//to be removed after testing
+	/*
 	stats_size = 2;
 	if (init_stats(stats_size))
 		exit(0);
 	stats[0]->info.name = strdup("video.mpvd.io.");
 	stats[0]->info.addr = calloc(2, sizeof(char *));
-	stats[0]->info.addr[0] = "fe80::cba3:7abd:be2e:9691";
+	stats[0]->info.addr[0] = "2a02:a03f:42d9:7800:a00:27ff:fe1c:fcb9";
 	stats[1]->info.name = strdup("test1.example.com.");
 	stats[1]->info.addr = calloc(3, sizeof(char *));
 	stats[1]->info.addr[0] = "2a02:2788:b4:222:d4b6:3191:8a44:51a6";
 	stats[1]->info.addr[1] = "2a02:2788:b4:222:cdf8:e989:b423:5443";
 	*/
+	
 
 	// ==== Packet capturing ====
 	pthread_t stats_thread[stats_size];
@@ -613,6 +627,8 @@ int main(int argc, char **argv) {
 	
 	free_stats(stats, stats_size);
 	fprintf(stderr, "Unable to sniff packets for any PvD.\nStopping\n");
+	pthread_cancel(tput_thread);
+	pthread_cancel(socket_thread);
 
 	return EXIT_SUCCESS;
 }
