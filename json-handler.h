@@ -35,21 +35,71 @@
 
 #include "stats.h"
 
-//int json_handler_print_value(FILE *stream, json_object *jobj);
+/**
+ * Parses a JSON string corresponding to an array of string values.
+ *
+ * @param json_str string representation of the JSON array
+ * @return array of the string elements
+ */
 char **json_handler_parse_string_array(const char *json_str);
 
+/**
+ * Parses a JSON string representing an array of IPv6 addresses.
+ *
+ * @param json_str string representation of the JSON array
+ * @return an array of IPv6 addresses (strings)
+ */
 char **json_handler_parse_addr_array(const char *json_str);
 
+/**
+ * Constructs a JSON object holding all statistics for all PvDs.
+ *
+ * @param stats #t_pvd_stats structure holding the statistics
+ * @param stats_size number of PvDs
+ * @return JSON object
+ */
 json_object *json_handler_all_stats(t_pvd_stats **stats, const int stats_size);
 
+/**
+ * Constructs a JSON object holding Round-Trip Time statistics for all PvDs.
+ *
+ * @param stats #t_pvd_stats structure holding the statistics
+ * @param stats_size number of PvDs
+ * @return JSON object
+ */
 json_object *json_handler_rtt_stats(t_pvd_stats **stats, const int stats_size);
 
+/**
+ * Constructs a JSON object holding throughput statistics for all PvDs.
+ *
+ * @param stats #t_pvd_stats structure holding the statistics
+ * @param stats_size number of PvDs
+ * @return JSON object
+ */
 json_object *json_handler_tput_stats(t_pvd_stats **stats, const int stats_size);
 
+/**
+ * Constructs a JSON object holding all statistics for one PvD.
+ *
+ * @param stats statistics corresponding to one PvD
+ * @return JSON object
+ */
 json_object *json_handler_all_stats_one_pvd(t_pvd_stats *stats);
 
+/**
+ * Constructs a JSON object holding Round-Trip Time statistics for one PvD.
+ *
+ * @param stats statistics corresponding to one PvD
+ * @return JSON object
+ */
 json_object *json_handler_rtt_stats_one_pvd(t_pvd_stats *stats);
 
+/**
+ * Constructs a JSON object holding throughput statistics for one PvD.
+ *
+ * @param stats statistics corresponding to one PvD
+ * @return JSON object
+ */
 json_object *json_handler_tput_stats_one_pvd(t_pvd_stats *stats);
 
 #endif //JSON_HANDLER_H

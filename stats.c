@@ -51,12 +51,14 @@
 void free_stats(t_pvd_stats **stats, int size) {
 	t_pvd_info *info = NULL;
 	for (int i = 0; i < size; ++i) {
+	    // free PvD info
 		info = &stats[i]->info;
 		free(info->name);
 		for (int j = 0; info->addr[j] != NULL; ++j) {
 			free(info->addr[j]);
 		}
 
+		// free flow structure linked-list
 		t_pvd_flow *flow = stats[i]->flow;
 		t_pvd_flow *next_flow;
 		while(flow != NULL) {
@@ -66,6 +68,7 @@ void free_stats(t_pvd_stats **stats, int size) {
 			flow = next_flow;
 		}
 
+		// destroy mutexes
 		pthread_mutex_destroy(&stats[i]->mutex);
 		pthread_mutex_destroy(&stats[i]->mutex_acked);
 	}
@@ -73,7 +76,8 @@ void free_stats(t_pvd_stats **stats, int size) {
 
 
 int add_flow(t_pvd_stats *stats, const u_int8_t src_ip[16], const u_int8_t dst_ip[16],
-	const u_int16_t src_port, const u_int16_t dst_port, const u_int32_t seq, const u_int32_t exp_ack, const struct timeval ts) {
+	const u_int16_t src_port, const u_int16_t dst_port, const u_int32_t seq,
+	const u_int32_t exp_ack, const struct timeval ts) {
 	int empty_list = 0;
 	// if there is no element in the linked list
 	if (stats->flow == NULL) {
@@ -188,15 +192,10 @@ t_pvd_flow *find_flow(t_pvd_flow *flow, const u_int8_t src_ip[16], const u_int8_
 
 
 void update_rtt(t_pvd_max_min_avg *rtt, t_pvd_flow *flow, struct timeval ts) {
-	double curr_rtt = (ts.tv_sec + ts.tv_usec * pow(10, -6)) - (flow->ts->tv_sec + flow->ts->tv_usec * pow(10, -6)); // RTT in secs
-	//printf("curr_rtt: %f\n", curr_rtt);
+	double curr_rtt = (ts.tv_sec + ts.tv_usec * pow(10, -6))
+	                  - (flow->ts->tv_sec + flow->ts->tv_usec * pow(10, -6)); // RTT in secs
 	rtt->min = (curr_rtt < rtt->min || rtt->min == 0) ? curr_rtt : rtt->min;
 	rtt->max = (curr_rtt > rtt->max) ? curr_rtt: rtt->max;
 	rtt->avg = ((double)(rtt->nb) * rtt->avg + curr_rtt) / (double) (rtt->nb+1);
-	/*
-	printf("min: %f\n", rtt->min);
-	printf("max: %f\n", rtt->max);
-	printf("avg: %f\n", rtt->avg);
-	*/
 	++rtt->nb;
 }

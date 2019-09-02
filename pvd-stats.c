@@ -60,58 +60,46 @@ static pthread_mutex_t mutex_print = PTHREAD_MUTEX_INITIALIZER;
 static t_pvd_stats **stats;
 static unsigned int stats_size = 0;
 
-
+/**
+ * Retrieves a list of Provisioning Domains from pvdd.
+ *
+ * @return #t_pvd_list structure holding the Fully-Qualified Domain Names of the PvDs
+ */
 t_pvd_list *get_pvd_list() {
+    int success = 0;
 	t_pvd_connection *conn = pvd_connect(PVDD_PORT);
 	t_pvd_list *list = malloc(sizeof(t_pvd_list));
+	if (!list) {
+	    fprintf(stderr, "Unable to allocate memory in order to hold the list of PvDs.\n");
+	    goto out;
+	}
 
+	// retrieve list from pvdd
 	if(pvd_get_pvd_list_sync(conn, list)) {
 		fprintf(stderr, "get_pvd_list: Error while retrieving PvDs list.\n"
 			"Make sure that pvdd is running on port %d\n", PVDD_PORT);
 		free(list);
-		return NULL;
+		goto out;
 	}
 
+	++success; // when reaching this line, the retrieval was successful
+
+out:
 	pvd_disconnect(conn);
-	return list;
+	return success ? list: NULL;
 }
 
-
-int get_pvd_attribute(t_pvd_list *list, char *pvdname, char *attr) {	
-	t_pvd_connection *conn = pvd_connect(PVDD_PORT);
-
-	char *attr_val = NULL;
-	if (pvd_get_attribute_sync(conn, pvdname, attr, &attr_val)) {
-		fprintf(stderr, "Unable to get the attribute %s from the PvD %s\n", attr, pvdname);
-		pvd_disconnect(conn);
-		free(attr_val);
-		return EXIT_FAILURE;
-	}
-	pvd_disconnect(conn);
-
-	printf("pvd_get_attribute_sync passed. attr_val: %s\n", attr_val);
-	char **attributes = json_handler_parse_string_array(attr_val);
-	free(attr_val);
-
-	if (attributes == NULL) {
-		return EXIT_FAILURE;
-	}
-
-	for (int i = 0; attributes[i] != NULL; ++i) {
-		printf("%s\n", attributes[i]);
-		free(attributes[i]);
-	}
-	free(attributes);
-
-	return EXIT_SUCCESS;
-}
-
-
-
+/**
+ * Retrieves the IPv6 addresses associated with a Provisioning Domain.
+ *
+ * @param pvdname Fully-Qualified Domain Name of the PvD
+ * @return array of IPv6 addresses (strings)
+ */
 char **get_pvd_addresses(char *pvdname) {
 	t_pvd_connection *conn = pvd_connect(PVDD_PORT);
-
 	char *addr_json = NULL;
+
+	// retrieve addresses from pvdd
 	if (pvd_get_attribute_sync(conn, pvdname, "addresses", &addr_json)) {
 		fprintf(stderr, "get_pvd_addresses: Unable to get the addresses from the PvD %s\n through pvdd\n",
 				pvdname);
@@ -121,6 +109,7 @@ char **get_pvd_addresses(char *pvdname) {
 	}
 	pvd_disconnect(conn);
 
+	// parse JSON array
 	char **addr = json_handler_parse_addr_array(addr_json);
 	free(addr_json);
 
@@ -128,7 +117,10 @@ char **get_pvd_addresses(char *pvdname) {
 }
 
 
-
+/**
+ * Structure representing the LINKTYPE_LINUX_SLL link-layer
+ * header, provided by libpcap as we are sniffing on all interfaces.
+ */
 struct linux_sll {
 	u_int16_t packet_type;
 	u_int16_t arphrd_type;
@@ -137,6 +129,11 @@ struct linux_sll {
 	u_int16_t protocol;
 };
 
+/**
+ * Prints an IPv6 address.
+ *
+ * @param addr array of unsigned integers
+ */
 void print_ip6_addr(const u_int8_t addr[16]) {
 	for (int i = 0; i < 16; ++i) {
 		printf("%x", addr[i]);
@@ -145,7 +142,11 @@ void print_ip6_addr(const u_int8_t addr[16]) {
 	}
 }
 
-
+/**
+ * Prints the data contained in a #t_pvd_flow structure.
+ *
+ * @param flow #t_pvd_flow structure
+ */
 void print_flow(t_pvd_flow *flow) {
 	printf("[");
 
@@ -162,12 +163,18 @@ void print_flow(t_pvd_flow *flow) {
 
 }
 
-
+/**
+ * Callback function called each time that a new packet arrives.
+ * It parses the content of the packet and updates the statistics accordingly.
+ *
+ * @param args #t_pvd_stats structure holding the statistics
+ * @param pkthdr packet header information
+ * @param packet packet's data
+ */
 void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char *packet) {
 	t_pvd_stats *stats = (t_pvd_stats *) args;
 
-	//printf("ts_sec = %ld, ts_usec = %ld, len = %d\n", pkthdr->ts.tv_sec, pkthdr->ts.tv_usec, pkthdr->len);
-	// ==== link-layer header ====
+	/// ==== link-layer header ====
 	struct linux_sll *sll = (struct linux_sll *) packet;
 	// packet received or sent
 	int rcvd = (ntohs(sll->packet_type) != 4);
@@ -181,14 +188,14 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 		return;
 
 
-	// ==== network-layer header ====
+	/// ==== network-layer header ====
 	struct ip6_hdr *ip = (struct ip6_hdr *) &packet[LEN_SLL];
 
 	// check if packet contains some transport-layer payload
 	if (ntohs(ip->ip6_plen) == 0)
 		return;
 
-	// ==== TCP transport-layer ====
+	/// ==== TCP transport-layer ====
 	if (ip->ip6_nxt == IPPROTO_TCP) {
 		struct tcphdr *tcp = (struct tcphdr *) &packet[LEN_SLL+LEN_IPV6];
 
@@ -199,19 +206,16 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 		// find the flow to which we ack
 		t_pvd_flow *flow = find_flow(stats->flow, ip->ip6_dst.s6_addr, ip->ip6_src.s6_addr,
 			ntohs(tcp->dest), ntohs(tcp->source), ntohl(tcp->ack_seq));
-		//print_flow(stats->flow);
 
 		if (flow) {
+		    // update statistics
 			pthread_mutex_lock(&stats->mutex);
-			//printf("Flow found. Calculating throughput and RTT\n");
 			update_rtt(&stats->rtt[0], flow, pkthdr->ts);
 			// if we received the packet, then it is an ACK to an uploaded packet
 			if (rcvd) {
-				//printf("UPLOAD\n");
 				update_rtt(&stats->rtt[1], flow, pkthdr->ts);
 			}
 			else {
-				//printf("DOWNLOAD\n");
 				update_rtt(&stats->rtt[2], flow, pkthdr->ts);
 			}
 			pthread_mutex_unlock(&stats->mutex);
@@ -219,7 +223,8 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 
 			pthread_mutex_lock(&stats->mutex_acked);
 			// count acked bytes
-			u_int32_t acked = (flow->exp_ack >= flow->seq) ? flow->exp_ack - flow->seq : 4294967295 - flow->seq + flow->exp_ack + 1;
+			u_int32_t acked = (flow->exp_ack >= flow->seq) ?
+			    flow->exp_ack - flow->seq : 4294967295 - flow->seq + flow->exp_ack + 1;
 			stats->acked_bytes[0] += acked;
 			if (rcvd)
 				stats->acked_bytes[1] += acked;
@@ -233,18 +238,18 @@ void pcap_callback(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char 
 		u_int32_t seq = ntohl(tcp->seq);
 		u_int32_t ack = seq;
 		ack += pkthdr->len - LEN_SLL - LEN_IPV6 - tcp->doff * 4; // TCP payload
-		//printf("Expected ack: %u\n", ack);
 		// If the packet contains no payload, it doesn't need to be acked by the other side.
 		// Thus, we don't need to keep track of it.
 		if (seq != ack) {
-			add_flow(stats, ip->ip6_src.s6_addr, ip->ip6_dst.s6_addr, ntohs(tcp->source), ntohs(tcp->dest), seq, ack, pkthdr->ts);
+			add_flow(stats, ip->ip6_src.s6_addr, ip->ip6_dst.s6_addr,
+			    ntohs(tcp->source), ntohs(tcp->dest), seq, ack, pkthdr->ts);
 		}
 	}
-	//printf("\n");
 }
 
 /**
  * Constructs a PCAP packet filter ORing the different addresses given as an input.
+ *
  * @param addr C-string array containing IP addresses on which should be filtered
  * @return Null-terminated C-string representing the PCAP filter
 **/
@@ -268,12 +273,17 @@ char *construct_filter(char **addr) {
 	return filter;
 }
 
-
+/**
+ * Creates a local UNIX socket.
+ *
+ * @return socket file descriptor
+ */
 static int create_local_socket() {
 	int s;
 	struct sockaddr_un addr;
 	mode_t curr_mask;
 
+	// create socket
 	if ((s = socket(AF_LOCAL, SOCK_STREAM, 0)) == -1)
 		return -1;
 
@@ -282,13 +292,16 @@ static int create_local_socket() {
 	addr.sun_family = AF_LOCAL;
 	strcpy(addr.sun_path, SOCKET_FILE);
 
+	// change socket access rights
 	curr_mask = umask(011); // needed so that non-root users can connect to socket
+	// bind socket to a local address
 	if (bind(s, (struct sockaddr *) &addr, sizeof(addr))){
 		close(s);
 		return -1;
 	}
 	umask(curr_mask);
 
+	// listen on messages
 	if (listen(s, 10)) {
 		close(s);
 		return -1;
@@ -297,7 +310,11 @@ static int create_local_socket() {
 	return s;
 }
 
-
+/**
+ * Handles a connection to the welcome socket.
+ *
+ * @param welcome_sock welcome socket
+ */
 static void handle_socket_connection(int welcome_sock) {
 	int sock;
 	struct sockaddr_in addr;
@@ -311,6 +328,7 @@ static void handle_socket_connection(int welcome_sock) {
 
 	addr_len = sizeof(struct sockaddr_in);
 
+	// accept connection
 	if ((sock = accept(welcome_sock, (struct sockaddr *) &addr, &addr_len)) <= 0) {
 		pthread_mutex_lock(&mutex_print);
 		fprintf(stderr, "Error while accepting client connection: %s\n", strerror(errno));
@@ -319,6 +337,7 @@ static void handle_socket_connection(int welcome_sock) {
 		return;
 	}
 
+	// receive message
 	size = recv(sock, buffer, SOCKET_BUFSIZE-1, 0);
 	if (size < 0) {
 		pthread_mutex_lock(&mutex_print);
@@ -330,9 +349,8 @@ static void handle_socket_connection(int welcome_sock) {
 	}
 
 	buffer[size] = '\0';
-	fprintf(stdout, "Message received: %s\n", buffer);
-	fflush(stdout);
 
+	// parse command and PvD
 	cmd = strtok(buffer, delim);
 	pvd = strtok(NULL, delim);
 
@@ -354,7 +372,8 @@ static void handle_socket_connection(int welcome_sock) {
 		}
 	}
 	
-	// If no PvD is specified, stats for all the PvDs should be retrieved and, thus, we need to lock all of them
+	// If no PvD is specified, stats for all the PvDs should be retrieved and,
+	// thus, we need to lock all of them
 	if (!pvd) {
 		for (int i = 0; i < stats_size; ++i)
 			pthread_mutex_lock(&stats[i]->mutex);
@@ -381,9 +400,9 @@ static void handle_socket_connection(int welcome_sock) {
 		pthread_mutex_unlock(&pvd_stats->mutex);
 	}
 
+	// construct string from JSON object
 	if (json != NULL) {
 		const char *json_str = json_object_to_json_string_ext(json, JSON_C_TO_STRING_SPACED | JSON_C_TO_STRING_PRETTY);
-		printf("%s\n", json_str);
 		send(sock, json_str, strlen(json_str)+1, 0);
 	}
 	else {
@@ -396,25 +415,40 @@ static void handle_socket_connection(int welcome_sock) {
 	close(sock);
 }
 
-
+/**
+ * Creates and handles the socket communication.
+ */
 static void *socket_communication() {
+    // create welcome socket
 	int welcome_sock = create_local_socket();
 	if (welcome_sock < 0) {
 		perror("Unable to create local welcome socket\n");
 		exit(EXIT_FAILURE);
 	}
 
+	// handle incoming messages
 	while(1) {
 		handle_socket_connection(welcome_sock);
 	}
-	
-	close(welcome_sock);
-	pthread_exit(NULL);
 }
 
-
+/**
+ * Initializes the structures holding the statistics.
+ *
+ * @param size number of Provisioning Domains
+ * @return integer indicating success (EXIT_SUCCESS) or failure (EXIT_FAILURE)
+ */
 static int init_stats(int size) {
+    // create array
 	stats = malloc(size * sizeof(t_pvd_stats*));
+	if (!stats) {
+	    pthread_mutex_lock(&mutex_print);
+	    fprintf(stderr, "Unable to allocate memory for the array of PvD statistics structures\n");
+	    fflush(stderr);
+	    pthread_mutex_unlock(&mutex_print);
+	    return EXIT_FAILURE;
+	}
+	// create array elements holding statistics
 	for (int i = 0; i < size; ++i) {
 		stats[i] = malloc(sizeof(t_pvd_stats));
 		if (stats[i] == NULL) {
@@ -425,6 +459,7 @@ static int init_stats(int size) {
 			free_stats(stats, i);
 			return EXIT_FAILURE;
 		}
+		// initialize values
 		stats[i]->info.name = NULL;
 		stats[i]->info.addr = NULL;
 		stats[i]->flow = NULL;
@@ -441,13 +476,18 @@ static int init_stats(int size) {
 		}
 		stats[i]->rcvd_cnt = 0;
 		stats[i]->snt_cnt = 0;
+		// initialize its mutexes
 		pthread_mutex_init(&stats[i]->mutex, NULL);
 		pthread_mutex_init(&stats[i]->mutex_acked, NULL);
 	}
 	return EXIT_SUCCESS;
 }
 
-
+/**
+ * Calculates the average, minimum and maximum throughput values each second.
+ *
+ * @param args NULL (unused)
+ */
 static void *calculate_tput(void *args) {
 	double curr_tput[3];
 	t_pvd_max_min_avg *tput = NULL;
@@ -458,7 +498,7 @@ static void *calculate_tput(void *args) {
 			pthread_mutex_lock(&stats[i]->mutex_acked);
 			// get number of acked bytes during last second (= current tput)
 			for (int j = 0; j < 3; ++j) {
-				curr_tput[j] = (double) stats[i]->acked_bytes[j] * 8 / 1000000; //tput in Mbps
+				curr_tput[j] = (double) stats[i]->acked_bytes[j] * 8 / 1000000; // tput in Mbps
 				stats[i]->acked_bytes[j] = 0;
 			}
 			pthread_mutex_unlock(&stats[i]->mutex_acked);
@@ -481,10 +521,14 @@ static void *calculate_tput(void *args) {
 			pthread_mutex_unlock(&stats[i]->mutex);
 		}
 	}
-	pthread_exit(NULL);
 }
 
-
+/**
+ * Sniffs packets on all network interfaces.
+ *
+ * @param args #t_pvd_stats structure holding the statistics
+ * @return NULL
+ */
 static void *sniff_packets(void *args) {
 	t_pvd_stats *stats = (t_pvd_stats*) args;
 	// As we're capturing on all the interfaces, the data link type will be LINKTYPE_LINUX_SLL.
@@ -492,7 +536,7 @@ static void *sniff_packets(void *args) {
 	struct bpf_program fp;
 	char errbuf[PCAP_ERRBUF_SIZE];
 	pcap_t *pcap = pcap_open_live(NULL, BUFSIZ, 0, 0, errbuf);
-	if (pcap == NULL) {
+	if (pcap == NULL) { // unable to open packet sniffing session
 		pthread_mutex_lock(&mutex_print);
 		fprintf(stderr, "pcap_open_live(): %s\n", errbuf);
 		fflush(stderr);
@@ -500,7 +544,7 @@ static void *sniff_packets(void *args) {
 		pthread_exit(NULL);
 	}
 
-	if (stats->info.addr[0] == NULL) {
+	if (stats->info.addr[0] == NULL) { // no IPv6 addresses for the PvD
 		pthread_mutex_lock(&mutex_print);
 		fprintf(stderr, "There is no IPv6 address associated to the pvd %s\n"
 			"Thus, no packets will be captured for this PvD.\n", stats->info.name);
@@ -533,6 +577,7 @@ static void *sniff_packets(void *args) {
 	}
 
 	free(filter);
+	// start packet capture
 	pcap_loop(pcap, -1, pcap_callback, (u_char*) stats);
 	pcap_close(pcap);
 	pthread_exit(NULL);
@@ -544,7 +589,7 @@ int main(int argc, char **argv) {
 	pthread_t tput_thread;
 	pthread_attr_t thread_attr;
 
-	// ==== collect PvD information ====
+	/// ==== collect PvD information ====
 	t_pvd_list *pvd_list = get_pvd_list();
 	if (pvd_list == NULL) {
 		return EXIT_FAILURE;
@@ -566,22 +611,8 @@ int main(int argc, char **argv) {
 	}
 	free(pvd_list);
 	
-	//to be removed after testing
-	/*
-	stats_size = 2;
-	if (init_stats(stats_size))
-		exit(0);
-	stats[0]->info.name = strdup("video.mpvd.io.");
-	stats[0]->info.addr = calloc(2, sizeof(char *));
-	stats[0]->info.addr[0] = "2a02:a03f:42d9:7800:a00:27ff:fe1c:fcb9";
-	stats[1]->info.name = strdup("test1.example.com.");
-	stats[1]->info.addr = calloc(3, sizeof(char *));
-	stats[1]->info.addr[0] = "2a02:2788:b4:222:d4b6:3191:8a44:51a6";
-	stats[1]->info.addr[1] = "2a02:2788:b4:222:cdf8:e989:b423:5443";
-	*/
-	
 
-	// ==== Packet capturing ====
+	/// ==== Packet capturing ====
 	pthread_t stats_thread[stats_size];
 
 	// Thread handling communication with other applications using local UNIX sockets	
@@ -617,6 +648,7 @@ int main(int argc, char **argv) {
 	}
 	pthread_attr_destroy(&thread_attr);
 
+	// join threads (only happens, when no packets can be sniffed for any PvD)
 	for (int i = 0; i < stats_size; ++i) {
 		if (pthread_join(stats_thread[i], NULL)) {
 			fprintf(stderr, "Error while joining packet sniffing threads\n");
